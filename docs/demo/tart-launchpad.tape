@@ -6,15 +6,15 @@ Set Height 700
 Set Theme "Dracula"
 Set TypingSpeed 0
 Set CursorBlink false
-Set PlaybackSpeed 0.75
+Set PlaybackSpeed 0.5
 Env PATH "/tmp/tart-launchpad-mock-bin:/opt/homebrew/bin:/usr/bin:/bin"
 
 Type "/tmp/tart-launchpad"
 Enter
-Sleep 4s
+Sleep 5s
 Screenshot "/tmp/tart-launchpad.png"
-Sleep 2s
-Enter
 Sleep 3s
 Enter
 Sleep 4s
+Enter
+Sleep 5s
