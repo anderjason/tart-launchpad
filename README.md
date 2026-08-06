@@ -4,6 +4,10 @@ Choose what a Tart VM can touch before you run it.
 
 Tart Launchpad is a terminal interface for local Tart VMs. It asks about host-folder access, network access, and optional mounted volumes. Before it runs, imports, or exports anything, it shows the exact Tart command.
 
+![Tart Launchpad with mock VMs](docs/demo/tart-launchpad.png)
+
+[Watch a short demo](docs/demo/tart-launchpad.gif)
+
 ## Requirements
 
 - macOS with [Tart](https://tart.run/) installed and available in `PATH`.

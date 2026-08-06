@@ -1,0 +1,3 @@
+#!/bin/sh
+
+printf '%s\n' '{"DeviceIdentifier":"mock-disk","MountPoint":"","VolumeName":"","MediaName":"","TotalSize":0,"Internal":true,"APFSVolumeRoles":[]}'

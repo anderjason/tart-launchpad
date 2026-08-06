@@ -1,0 +1,12 @@
+#!/bin/sh
+
+if [ "$1" = "list" ] && [ "$2" = "--format" ] && [ "$3" = "json" ]; then
+  printf '%s\n' '[
+    {"Name":"design-lab","Source":"local","State":"stopped","Running":false},
+    {"Name":"api-sandbox","Source":"local","State":"stopped","Running":false},
+    {"Name":"base-macos","Source":"local","State":"stopped","Running":false}
+  ]'
+  exit 0
+fi
+
+printf 'mock tart: %s\n' "$*"
