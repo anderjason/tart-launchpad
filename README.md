@@ -1,47 +1,71 @@
 # Tart Launchpad
 
-A small personal TUI for running Tart VMs with explicit folder, network, and mounted volume boundaries.
+Choose what a Tart VM can touch before you run it.
 
-Tart Launchpad asks three practical questions before running a VM:
+Tart Launchpad is a terminal interface for local Tart VMs. It asks about host-folder access, network access, and optional mounted volumes. Before it runs, imports, or exports anything, it shows the exact Tart command.
 
-1. Which VM should run?
-2. What folder access should it get?
-3. What network access should it get?
-4. Should any mounted host volumes be shared read-write?
+## Requirements
 
-It then shows the exact `tart` command before execution.
+- macOS with [Tart](https://tart.run/) installed and available in `PATH`.
+- Go 1.22 or newer to build from source.
+- Tart Softnet only when you choose `offline`, `internet`, `lan`, or `lan-and-internet` network access.
 
-It can also export and import `.tvm` archives at paths you specify. Import/export reviews show the exact Tart command, block silent overwrites or VM-name collisions, and warn that VM archives may contain sensitive state.
+## Build and run
 
-## Status
-
-Early-stage tool for local Tart workflows.
-
-## Build
-
-Run builds and dependency downloads in the approved DevWorker environment unless explicitly approved otherwise:
-
-```bash
-go test ./...
-go build ./cmd/tart-launchpad
+```sh
+go build -o tart-launchpad ./cmd/tart-launchpad
+./tart-launchpad
 ```
 
-## Vocabulary
+## Use it
 
-- VM kinds: `template`, `workspace`, `unmarked`
-- folder access: `no-folder`, `read-here`, `edit-here`
-- network access: `offline`, `internet`, `host`, `lan`, `lan-and-internet`
+1. Select a VM. Launchpad treats ordinary VMs as workspaces by default. Mark a clean source VM as a template when you want to create new VMs from it.
+2. Choose folder access, network access, and any mounted volumes to share.
+3. Review the generated commands, then run them.
 
-Mounted volume access is optional, off by default, and uses Tart `--dir=<name>:/Volumes/<name>` directory sharing. Launchpad does not mount, unmount, chmod, chown, use raw `--disk`, or fall back to another sharing mode.
+Templates can create a workspace or a temporary VM, or run with a read-only root disk. Import and export each ask for a `.tvm` path before review.
 
-## Softnet Setup
+## Plan without running
 
-The `offline`, `internet`, `lan`, and `lan-and-internet` modes use Tart Softnet. Softnet may need a one-time admin setup on the host before a non-admin account can use it:
+Use `plan` when you only want to see the commands:
 
-```bash
+```sh
+./tart-launchpad plan \
+  --vm example-vm \
+  --folder-access read-here \
+  --network-access offline
+```
+
+The command prints the Tart commands and does not execute them.
+
+## Access choices
+
+Folder access applies to the directory where you start Launchpad:
+
+- `no-folder`: share no host folder.
+- `read-here`: share the current directory read-only.
+- `edit-here`: share the current directory read-write.
+
+Network access:
+
+- `offline`: block outbound IPv4 through Softnet.
+- `internet`: allow internet access through Softnet; block the host and local private networks.
+- `host`: use Tart's host-only network.
+- `lan`: allow configured local network ranges only.
+- `lan-and-internet`: allow configured local network ranges and the internet.
+
+Mounted host volumes are always off by default. Selected volumes are shared read-write. Launchpad never mounts, unmounts, or prepares host storage, and it does not use raw disks.
+
+Launchpad turns clipboard and audio off for every run. It is not a security sandbox.
+
+## Softnet setup
+
+Launchpad checks Softnet before an operation that needs it. If setup is required, run this once from an administrator shell:
+
+```sh
 softnet_path="$(realpath "$(command -v softnet)")"
 sudo chown root:wheel "$softnet_path"
 sudo chmod 4755 "$softnet_path"
 ```
 
-Run Launchpad as the normal VM user after that setup. Do not run Launchpad itself as an admin account for ordinary VM work.
+Then run Launchpad as your normal user.

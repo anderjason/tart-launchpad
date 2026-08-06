@@ -74,8 +74,7 @@ Usage:
   tart-launchpad
   tart-launchpad plan --vm <name> --folder-access <mode> --network-access <mode> [--cwd <path>] [--template-read-only] [--volume /Volumes/Name]
 
-Canonical terms:
-  VM kinds:       template, workspace, unmarked
+VM kinds:         template, workspace
   folder access:  no-folder, read-here, edit-here
   network access: offline, internet, host, lan, lan-and-internet
 `
