@@ -11,10 +11,16 @@ Env PATH "/tmp/tart-launchpad-mock-bin:/opt/homebrew/bin:/usr/bin:/bin"
 
 Type "/tmp/tart-launchpad"
 Enter
-Sleep 5s
+Sleep 4s
 Screenshot "/tmp/tart-launchpad.png"
-Sleep 3s
+Enter
+Sleep 2s
 Enter
 Sleep 4s
+Down
+Sleep 4s
 Enter
-Sleep 5s
+Down
+Sleep 4s
+Enter
+Sleep 7s
