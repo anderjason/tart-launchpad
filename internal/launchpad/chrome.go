@@ -201,7 +201,10 @@ func (m model) statusRow(width int) string {
 // run time. It never changes the plan; it only tells the truth early.
 func (m model) advisory() string {
 	if m.softnetStatusKnown && !m.softnetIsReady && m.screenTouchesSoftnet() {
-		return "softnet is not set up on this Mac: offline, internet, lan, and lan-and-internet will fail at run"
+		if m.screen == screenReview || m.screen == screenExecute {
+			return "Set up Softnet before running."
+		}
+		return "Softnet needs setup for these options."
 	}
 	return ""
 }

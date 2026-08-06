@@ -93,6 +93,23 @@ func TestNetworkChoiceAdvancesToReview(t *testing.T) {
 	}
 }
 
+func TestMissingSoftnetAdvisoryFitsReview(t *testing.T) {
+	m := workspaceRunFixture().model()
+	m.width = frameDefaultWidth + 2
+	m.screen = screenReview
+	m.softnetStatusKnown = true
+	m.softnetIsReady = false
+	m.plan = Plan{Prerequisites: PlanPrerequisites{Softnet: true}}
+
+	status := m.statusRow(m.frameWidth())
+	if !strings.Contains(status, "Set up Softnet before running.") {
+		t.Fatalf("status = %q, want concise Softnet setup guidance", status)
+	}
+	if lipgloss.Width(status) > m.frameWidth() {
+		t.Fatalf("status width = %d, frame width = %d", lipgloss.Width(status), m.frameWidth())
+	}
+}
+
 func TestNetworkChoiceWithHostVolumesAdvancesToVolumeScreen(t *testing.T) {
 	m := newModelWithVolumes(DefaultConfig(), "", []VM{{
 		Name:  "dev",

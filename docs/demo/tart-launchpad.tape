@@ -22,5 +22,3 @@ Sleep 4s
 Enter
 Down
 Sleep 4s
-Enter
-Sleep 7s
