@@ -1,6 +1,6 @@
 # REPO-SECURITY.md
 
-Last reviewed: 2026-08-07
+Last reviewed: 2026-08-08
 
 ## Scope
 
@@ -63,6 +63,6 @@ For command-planning changes, tests should cover generated Tart command argument
 
 ## Known Gaps
 
-- No dependency lockfile is present until the first approved `go mod tidy`.
+- `go.mod` pins the module graph, and `go.sum` records dependency checksums. Dependency changes still require review and approved DevWorker checks.
 - The first implementation shells out to Tart and does not mock a full VM lifecycle integration test.
 - `offline` means outbound IPv4 blocked through Tart Softnet CIDR filtering, not a complete proof of no network activity.

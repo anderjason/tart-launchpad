@@ -251,7 +251,7 @@ func (m model) Init() tea.Cmd {
 // chosen network mode on the user's behalf.
 func (m model) softnetStatusCmd() tea.Cmd {
 	return func() tea.Msg {
-		path, err := exec.LookPath("softnet")
+		path, err := trustedSoftnetPath()
 		if err != nil {
 			return softnetStatusMsg{ready: false}
 		}
@@ -1072,6 +1072,14 @@ func (m model) beginExecution() (tea.Model, tea.Cmd) {
 		m.mode = modeNormal
 		return m, nil
 	}
+	if err := m.validateReviewedHostResources(); err != nil {
+		m.executeStates = make([]executeStepState, len(m.plan.Steps))
+		m.executeErr = err.Error()
+		m.executeDone = true
+		m.screen = screenExecute
+		m.mode = modeNormal
+		return m, nil
+	}
 	m.executeIndex = 0
 	m.executeStates = make([]executeStepState, len(m.plan.Steps))
 	m.stepStartedAt = make([]time.Time, len(m.plan.Steps))
@@ -1114,26 +1122,8 @@ func (m model) executeCurrentStepCmd() tea.Cmd {
 	index := m.executeIndex
 	step := m.plan.Steps[index]
 	tart := m.tart
-	if step.Kind == CommandStepRun && (m.plan.Review.FolderAccess == FolderReadFolder || m.plan.Review.FolderAccess == FolderEditFolder) {
-		resolved, err := m.host.ResolveProjectDirectory(m.plan.Review.ProjectPath)
-		if err != nil {
-			return func() tea.Msg { return executeStepFinishedMsg{index: index, err: err} }
-		}
-		if resolved != m.plan.Review.ProjectPath {
-			err := fmt.Errorf("project folder changed after review: %s", m.plan.Review.ProjectPath)
-			return func() tea.Msg { return executeStepFinishedMsg{index: index, err: err} }
-		}
-	}
-	if step.Kind == CommandStepRun && len(m.plan.Review.VolumePaths) > 0 {
-		if m.volumeLister == nil {
-			err := fmt.Errorf("mounted-volume validation is unavailable")
-			return func() tea.Msg { return executeStepFinishedMsg{index: index, err: err} }
-		}
-		mounted, err := m.volumeLister.ListHostVolumes()
-		if err != nil {
-			return func() tea.Msg { return executeStepFinishedMsg{index: index, err: err} }
-		}
-		if err := verifyReviewedVolumes(m.plan.Review.VolumePaths, m.plan.Review.VolumeIDs, mounted); err != nil {
+	if step.Kind == CommandStepRun {
+		if err := m.validateReviewedHostResources(); err != nil {
 			return func() tea.Msg { return executeStepFinishedMsg{index: index, err: err} }
 		}
 	}
@@ -1858,6 +1848,14 @@ func (m model) reviewLines() []string {
 		lines = append(lines, sectionHeading("THIS RUN WILL TOUCH"), "")
 		lines = append(lines, m.renderCompletedGrantLedger(), "")
 	}
+	if m.plan.ExportPath != "" {
+		lines = append(lines,
+			sectionHeading("FINAL ARCHIVE"),
+			"",
+			"  "+m.plan.ExportPath,
+			"  "+mutedStyle.Render("Launchpad installs the completed archive here without replacing an existing file."),
+			"")
+	}
 	lines = append(lines, sectionHeading("EXACT COMMAND"), "")
 	for _, step := range m.plan.Steps {
 		lines = append(lines, mutedStyle.Render(step.Label))
@@ -2133,6 +2131,29 @@ func verifyReviewedVolumes(paths []string, expectedIDs map[string]string, mounte
 		}
 	}
 	return nil
+}
+
+func (m model) validateReviewedHostResources() error {
+	if m.plan.Review.FolderAccess == FolderReadFolder || m.plan.Review.FolderAccess == FolderEditFolder {
+		resolved, err := m.host.ResolveProjectDirectory(m.plan.Review.ProjectPath)
+		if err != nil {
+			return err
+		}
+		if resolved != m.plan.Review.ProjectPath {
+			return fmt.Errorf("project folder changed after review: %s", m.plan.Review.ProjectPath)
+		}
+	}
+	if len(m.plan.Review.VolumePaths) == 0 {
+		return nil
+	}
+	if m.volumeLister == nil {
+		return fmt.Errorf("mounted-volume validation is unavailable")
+	}
+	mounted, err := m.volumeLister.ListHostVolumes()
+	if err != nil {
+		return err
+	}
+	return verifyReviewedVolumes(m.plan.Review.VolumePaths, m.plan.Review.VolumeIDs, mounted)
 }
 
 func (m *model) reconcileCompletedCleanup() bool {

@@ -67,12 +67,8 @@ Launchpad is not a security sandbox. It makes each run's selected host connectio
 
 ## Softnet setup
 
-Launchpad checks Softnet before an operation that needs it. If setup is required, run this once from an administrator shell:
+Launchpad checks Softnet before an operation that needs it. It validates that Softnet resolves to its Homebrew Cellar installation and that the current account cannot replace the helper or its parent directories. If setup is needed, Launchpad prints the exact validated path and the two admin commands to run from an administrator shell.
 
-```sh
-softnet_path="$(realpath "$(command -v softnet)")"
-sudo chown root:wheel "$softnet_path"
-sudo chmod 4755 "$softnet_path"
-```
+Do not substitute a path found with `command -v`; a project-controlled `PATH` could select an untrusted executable.
 
 Then run Launchpad as your normal user.

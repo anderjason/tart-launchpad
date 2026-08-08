@@ -292,6 +292,36 @@ func TestExecutionRejectsVolumeChangedAfterReview(t *testing.T) {
 	}
 }
 
+func TestExecutionValidatesReviewedVolumesBeforeClone(t *testing.T) {
+	m := newModel(DefaultConfig(), filepath.Join(t.TempDir(), "config.json"), nil)
+	m.plan = temporaryExecutionPlan()
+	m.plan.Review.VolumePaths = []string{"/Volumes/Backup"}
+	m.plan.Review.VolumeIDs = map[string]string{"/Volumes/Backup": "disk8s1"}
+	m.volumeLister = fakeVolumeLister{volumes: []HostVolume{{
+		ID:   "disk9s1",
+		Path: "/Volumes/Backup",
+		Name: "Replacement",
+	}}}
+	tart := &fakeTart{}
+	m.tart = tart
+
+	updated, cmd := m.beginExecution()
+	got := updated.(model)
+
+	if cmd != nil {
+		t.Fatal("execution returned a clone command after boundary validation failed")
+	}
+	if !got.executeDone || !strings.Contains(got.executeErr, "changed after review") {
+		t.Fatalf("execution state = done %v, error %q", got.executeDone, got.executeErr)
+	}
+	if len(tart.calls) != 0 {
+		t.Fatalf("Tart calls = %#v, want none", tart.calls)
+	}
+	if len(got.cfg.PendingCleanup) != 0 {
+		t.Fatalf("pending cleanup = %#v, want none before clone", got.cfg.PendingCleanup)
+	}
+}
+
 func TestRenderFrameShowsTrailStepAndDangerContext(t *testing.T) {
 	m := newModel(DefaultConfig(), "", nil)
 	view := m.renderFrame(framePage{
@@ -513,6 +543,9 @@ func TestExportReviewShowsSensitiveStateWarning(t *testing.T) {
 	}
 	if strings.Contains(view, "Folder") {
 		t.Fatalf("review = %q, did not want run boundary summary for export", view)
+	}
+	if !strings.Contains(view, "FINAL ARCHIVE") || !strings.Contains(view, "/tmp/dev.tvm") {
+		t.Fatalf("review = %q, want final export destination", view)
 	}
 }
 
@@ -937,8 +970,12 @@ func TestExportDoesNotReplaceDestinationCreatedAfterReview(t *testing.T) {
 	if got.executeErr == "" || !strings.Contains(got.executeErr, "already exists") {
 		t.Fatalf("execution error = %q, want destination collision", got.executeErr)
 	}
-	if _, err := os.Stat(plan.ExportTemporaryPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("temporary export remains after collision: %v", err)
+	temporaryContents, err := os.ReadFile(plan.ExportTemporaryPath)
+	if err != nil {
+		t.Fatalf("read preserved temporary export: %v", err)
+	}
+	if string(temporaryContents) != "new archive" {
+		t.Fatalf("temporary export contents = %q, want completed archive", temporaryContents)
 	}
 }
 

@@ -5,8 +5,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 )
 
 func newExportTemporaryPath(destination string) (string, error) {
@@ -41,18 +43,20 @@ func reserveExportTemporary(temporaryPath string, destinationPath string) error 
 }
 
 func installExportTemporary(temporaryPath string, destinationPath string) error {
+	return installExportTemporaryWithLink(temporaryPath, destinationPath, os.Link)
+}
+
+func installExportTemporaryWithLink(temporaryPath string, destinationPath string, link func(string, string) error) error {
 	if err := validateExportPaths(temporaryPath, destinationPath); err != nil {
 		return err
 	}
-	if err := os.Link(temporaryPath, destinationPath); err != nil {
-		installErr := fmt.Errorf("install export archive: %w", err)
+	if err := link(temporaryPath, destinationPath); err != nil {
 		if errors.Is(err, os.ErrExist) {
-			installErr = fmt.Errorf("%w: export destination already exists: %s", ErrUsage, destinationPath)
+			return fmt.Errorf("%w: export destination already exists: %s; completed archive preserved at %s", ErrUsage, destinationPath, temporaryPath)
 		}
-		if cleanupErr := discardExportTemporary(temporaryPath); cleanupErr != nil {
-			return errors.Join(installErr, cleanupErr)
+		if err := copyExportNoClobber(temporaryPath, destinationPath); err != nil {
+			return fmt.Errorf("install export archive without hard links: %w; completed archive preserved at %s", err, temporaryPath)
 		}
-		return installErr
 	}
 	if err := os.Remove(temporaryPath); err != nil {
 		return fmt.Errorf("remove installed export temporary file: %w", err)
@@ -62,10 +66,61 @@ func installExportTemporary(temporaryPath string, destinationPath string) error 
 		return fmt.Errorf("open export directory: %w", err)
 	}
 	defer directory.Close()
-	if err := directory.Sync(); err != nil {
+	if err := directory.Sync(); err != nil && !errors.Is(err, syscall.EINVAL) && !errors.Is(err, syscall.ENOTSUP) {
 		return fmt.Errorf("sync export directory: %w", err)
 	}
 	return nil
+}
+
+func copyExportNoClobber(sourcePath string, destinationPath string) (returnErr error) {
+	source, err := os.Open(sourcePath)
+	if err != nil {
+		return err
+	}
+	defer source.Close()
+
+	destination, err := os.OpenFile(destinationPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("%w: export destination already exists: %s", ErrUsage, destinationPath)
+		}
+		return err
+	}
+	createdInfo, err := destination.Stat()
+	if err != nil {
+		_ = destination.Close()
+		return err
+	}
+	defer func() {
+		if closeErr := destination.Close(); returnErr == nil && closeErr != nil {
+			returnErr = closeErr
+		}
+		if returnErr != nil {
+			_ = removeFileIfSame(destinationPath, createdInfo)
+		}
+	}()
+
+	if _, err := io.Copy(destination, source); err != nil {
+		return err
+	}
+	if err := destination.Sync(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func removeFileIfSame(path string, openInfo os.FileInfo) error {
+	pathInfo, err := os.Lstat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if !os.SameFile(openInfo, pathInfo) {
+		return nil
+	}
+	return os.Remove(path)
 }
 
 func discardExportTemporary(path string) error {

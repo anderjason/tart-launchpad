@@ -58,7 +58,9 @@ func (RealHostEnvironment) ResolveProjectDirectory(path string) (string, error) 
 }
 
 func projectFolderIsForbidden(path string, home string) bool {
-	if strings.EqualFold(filepath.Clean(path), string(filepath.Separator)) || strings.EqualFold(filepath.Clean(path), filepath.Clean(home)) {
+	if strings.EqualFold(filepath.Clean(path), string(filepath.Separator)) ||
+		strings.EqualFold(filepath.Clean(path), filepath.Clean(home)) ||
+		pathAtOrWithin(home, path) {
 		return true
 	}
 	forbidden := []string{
@@ -72,7 +74,7 @@ func projectFolderIsForbidden(path string, home string) bool {
 		filepath.Join(home, "Library", "Application Support", "1Password"),
 	}
 	for _, root := range forbidden {
-		if pathAtOrWithin(path, root) {
+		if pathAtOrWithin(path, root) || pathAtOrWithin(root, path) {
 			return true
 		}
 	}

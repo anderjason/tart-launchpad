@@ -44,3 +44,24 @@ func TestResolveProjectDirectoryRejectsBroadAndCredentialRoots(t *testing.T) {
 		}
 	}
 }
+
+func TestProjectFolderIsForbiddenRejectsParentsOfHomeAndCredentialRoots(t *testing.T) {
+	home := filepath.Join(string(filepath.Separator), "Users", "jason")
+	for _, path := range []string{
+		filepath.Dir(home),
+		filepath.Join(home, "Library"),
+		filepath.Join(home, ".config"),
+	} {
+		if !projectFolderIsForbidden(path, home) {
+			t.Fatalf("projectFolderIsForbidden(%q) = false, want true", path)
+		}
+	}
+}
+
+func TestProjectFolderIsForbiddenAllowsNormalProjectBelowHome(t *testing.T) {
+	home := filepath.Join(string(filepath.Separator), "Users", "jason")
+	project := filepath.Join(home, "Projects", "tart-manager")
+	if projectFolderIsForbidden(project, home) {
+		t.Fatalf("projectFolderIsForbidden(%q) = true, want false", project)
+	}
+}
