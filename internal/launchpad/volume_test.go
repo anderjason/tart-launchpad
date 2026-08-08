@@ -1,6 +1,40 @@
 package launchpad
 
-import "testing"
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestListHostVolumesFailsWhenEntryCannotBeInspected(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"bad", "good"} {
+		if err := os.Mkdir(filepath.Join(root, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	_, err := listHostVolumes(root, volumeDiscovery{
+		readDir: os.ReadDir,
+		stat:    os.Stat,
+		info: func(args ...string) ([]byte, error) {
+			if filepath.Base(args[len(args)-1]) == "bad" {
+				return nil, errors.New("unreadable volume")
+			}
+			return []byte(`{
+				"DeviceIdentifier": "disk7s1",
+				"MountPoint": "/Volumes/good",
+				"VolumeName": "good",
+				"Internal": false,
+				"APFSVolumeRoles": []
+			}`), nil
+		},
+	})
+	if err == nil {
+		t.Fatal("volume discovery succeeded; want inspection failure")
+	}
+}
 
 func TestHostVolumeFromInfoJSONKeepsExternalMountedVolume(t *testing.T) {
 	volume, ok, err := hostVolumeFromInfoJSON([]byte(`{

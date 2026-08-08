@@ -50,6 +50,12 @@ func runPlan(args []string) error {
 	if err != nil {
 		return err
 	}
+	if options.FolderAccess != launchpad.FolderNoFolder {
+		options.ProjectPath, err = (launchpad.RealHostEnvironment{}).ResolveProjectDirectory(options.ProjectPath)
+		if err != nil {
+			return err
+		}
+	}
 	plan, err := launchpad.BuildRunPlan(cfg, options)
 	if err != nil {
 		return err
@@ -72,10 +78,10 @@ func helpText() string {
 
 Usage:
   tart-launchpad
-  tart-launchpad plan --vm <name> --folder-access <mode> --network-access <mode> [--cwd <path>] [--template-read-only] [--volume /Volumes/Name]
+  tart-launchpad plan --vm <name> --folder-access <mode> --network-access <mode> [--project-folder <path>] [--clipboard] [--guest-audio] [--template-read-only] [--volume /Volumes/Name]
 
 VM kinds:         template, workspace
-  folder access:  no-folder, read-here, edit-here
+  folder access:  no-folder, read-folder, edit-folder
   network access: offline, internet, host, lan, lan-and-internet
 `
 }

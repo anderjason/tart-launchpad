@@ -59,6 +59,7 @@ const (
 	screenRunDuration
 	screenName
 	screenFolder
+	screenProjectFolderPath
 	screenNetwork
 	screenLANCIDR
 	screenLANCIDRText
@@ -145,6 +146,7 @@ type model struct {
 	keysOverlay    bool
 	mode           inputMode
 	homeFilter     string
+	homeFocusVM    string
 	loadingVMs     bool
 	loadingVolumes bool
 	spinner        spinner.Model
@@ -159,41 +161,46 @@ type model struct {
 	backStack    []navigationEntry
 	returnScreen screen
 
-	selectedVM         VM
-	selectedTemplate   VM
-	runDuration        RunDuration
-	nameMode           nameMode
-	nameInput          string
-	nameCursor         int
-	lanInput           string
-	lanCursor          int
-	lanCIDRChoices     []lanCIDRChoice
-	folderAccess       FolderAccess
-	networkAccess      NetworkAccess
-	hostVolumes        []HostVolume
-	host               HostEnvironment
-	tart               Tart
-	volumeLister       VolumeLister
-	selectedVolumePath map[string]bool
-	importSourcePath   string
-	importPathCursor   int
+	selectedVM            VM
+	selectedTemplate      VM
+	runDuration           RunDuration
+	nameMode              nameMode
+	nameInput             string
+	nameCursor            int
+	lanInput              string
+	lanCursor             int
+	lanCIDRChoices        []lanCIDRChoice
+	folderAccess          FolderAccess
+	projectPath           string
+	projectPathInput      string
+	projectPathCursor     int
+	networkAccess         NetworkAccess
+	clipboard             bool
+	guestAudio            bool
+	hostVolumes           []HostVolume
+	host                  HostEnvironment
+	tart                  Tart
+	volumeLister          VolumeLister
+	selectedVolumePath    map[string]bool
+	importSourcePath      string
+	importPathCursor      int
 	exportDestinationPath string
 	exportPathCursor      int
-	plan               Plan
-	reviewScroll       int
-	deleteConfirmInput string
-	executeIndex       int
-	executeStates      []executeStepState
-	executeOutput      string
-	executeErr         string
-	executeDone        bool
-	executeSummary     string
-	temporaryVMExists  bool
-	executeStartedAt   time.Time
-	executeFinishedAt  time.Time
-	stepStartedAt      []time.Time
-	stepFinishedAt     []time.Time
-	missingRunVolumes  []string
+	plan                  Plan
+	reviewScroll          int
+	deleteConfirmInput    string
+	executeIndex          int
+	executeStates         []executeStepState
+	executeOutput         string
+	executeErr            string
+	executeDone           bool
+	executeSummary        string
+	temporaryVMExists     bool
+	executeStartedAt      time.Time
+	executeFinishedAt     time.Time
+	stepStartedAt         []time.Time
+	stepFinishedAt        []time.Time
+	missingRunVolumes     []string
 }
 
 func newModel(cfg Config, cfgPath string, vms []VM) model {
@@ -257,6 +264,7 @@ func (m model) loadVMsCmd() tea.Cmd {
 	if m.tart != nil {
 		tart := m.tart
 		cfg := m.cfg
+		cfg.VMs = cloneVMConfigs(m.cfg.VMs)
 		return func() tea.Msg {
 			vms, err := tart.ListVMs()
 			if err != nil {
@@ -283,7 +291,7 @@ func (m model) loadVolumesCmd() tea.Cmd {
 }
 
 func (m model) homePollCmd() tea.Cmd {
-	if m.screen != screenHome || m.tart == nil {
+	if m.tart == nil {
 		return nil
 	}
 	return tea.Tick(5*time.Second, func(time.Time) tea.Msg { return homePollMsg{} })
@@ -297,7 +305,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case vmsLoadedMsg:
 		m.vms = MergeKinds(m.cfg, []VM(msg))
+		if m.reconcileCompletedCleanup() {
+			m.needsSave = true
+		}
 		m.loadingVMs = false
+		if m.homeFocusVM != "" && m.focusHomeVM(m.homeFocusVM) {
+			m.homeFocusVM = ""
+		}
 		m.cursor = clampCursor(m.cursor, len(m.filteredHomeItems()))
 	case hostVolumesLoadedMsg:
 		m.hostVolumes = []HostVolume(msg)
@@ -334,6 +348,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.reviewScroll = min(m.reviewScroll, m.reviewMaxScroll())
 	case tea.KeyMsg:
 		if m.status != "" && msg.String() != "c" {
 			m.status = ""
@@ -392,10 +407,9 @@ func (m model) handleKey(key string) (tea.Model, tea.Cmd) {
 	case screenName:
 		return m.handleNameKey(key)
 	case screenFolder:
-		return m.handleChoiceKey(key, len(FolderAccesses), func(m model) model {
-			m.folderAccess = FolderAccesses[m.cursor]
-			return m.goToWithCursor(screenNetwork, indexNetwork(m.networkAccess))
-		})
+		return m.handleHostConnectionsKey(key)
+	case screenProjectFolderPath:
+		return m.handleProjectFolderPathKey(key)
 	case screenNetwork:
 		return m.handleChoiceKey(key, len(NetworkAccesses), func(m model) model {
 			m.networkAccess = NetworkAccesses[m.cursor]
@@ -466,11 +480,13 @@ func (m model) handleHomeKey(key string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		name := m.cfg.PendingCleanup[0]
-		m.selectedVM = VM{Name: name, Kind: m.cfg.KindFor(name)}
-		if err := m.prepareDeletePlan(); err != nil {
-			return m.showMessage(err.Error(), screenHome), nil
+		if m.focusHomeVM(name) {
+			m.status = "verify " + name + " before deleting it; cleanup identity is ambiguous"
+			return m, nil
 		}
-		m = m.goTo(screenReview)
+		m.cfg.RemovePendingCleanup(name)
+		m.needsSave = true
+		m.status = "cleanup already complete for " + name
 	case ".":
 		if len(items) == 0 {
 			return m, nil
@@ -482,11 +498,18 @@ func (m model) handleHomeKey(key string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.selectedVM = item.vm
-		m.flow = flowRunExisting
+		nextFlow := flowRunExisting
+		if item.vm.Kind == VMKindTemplate {
+			nextFlow = flowRunTemplateReadOnly
+		}
+		m = m.beginRunFlow(nextFlow)
 		m.folderAccess = last.FolderAccess
+		m.projectPath = last.ProjectPath
+		m.projectPathInput = last.ProjectPath
+		m.projectPathCursor = runeCount(last.ProjectPath)
 		m.networkAccess = last.NetworkAccess
-		m.selectedVolumePath = map[string]bool{}
-		m.missingRunVolumes = nil
+		m.clipboard = last.Clipboard
+		m.guestAudio = last.GuestAudio
 		m.applyLastRunVolumes(last.VolumePaths)
 		if err := m.preparePlan(); err != nil {
 			return m.showMessage(err.Error(), screenHome), nil
@@ -511,7 +534,17 @@ func (m model) handleHomeKey(key string) (tea.Model, tea.Cmd) {
 		if len(templates) == 0 {
 			return m.showMessage("Mark a VM as template first with m.", screenHome), nil
 		}
-		m.flow = flowNewFromTemplate
+		selected := VM{}
+		if len(items) > 0 && items[m.cursor].vm.Kind == VMKindTemplate {
+			selected = items[m.cursor].vm
+		} else if len(templates) == 1 {
+			selected = templates[0]
+		} else {
+			m.status = "select a template before creating a VM"
+			return m, nil
+		}
+		m = m.beginRunFlow(flowNewFromTemplate)
+		m.selectedTemplate = selected
 		m = m.goToWithCursor(screenRunDuration, 0)
 	case "i":
 		m.flow = flowImportArchive
@@ -570,7 +603,7 @@ func (m model) handleVMActionKey(key string) (tea.Model, tea.Cmd) {
 	case "enter", "l", "right":
 		switch vmActions()[m.cursor] {
 		case "run":
-			m.flow = flowRunExisting
+			m = m.beginRunFlow(flowRunExisting)
 			m = m.goToWithCursor(screenFolder, indexFolder(m.folderAccess))
 		case "export":
 			m.flow = flowExportVM
@@ -608,7 +641,7 @@ func (m model) handleTemplateActionKey(key string) (tea.Model, tea.Cmd) {
 	case "enter", "l", "right":
 		switch templateActions()[m.cursor] {
 		case "new temporary run":
-			m.flow = flowNewFromTemplate
+			m = m.beginRunFlow(flowNewFromTemplate)
 			m.selectedTemplate = m.selectedVM
 			m.runDuration = RunDurationTemporaryRun
 			m.nameMode = nameModeNewVM
@@ -617,7 +650,7 @@ func (m model) handleTemplateActionKey(key string) (tea.Model, tea.Cmd) {
 			m.message = ""
 			m = m.goToWithCursor(screenName, 0)
 		case "new workspace":
-			m.flow = flowNewFromTemplate
+			m = m.beginRunFlow(flowNewFromTemplate)
 			m.selectedTemplate = m.selectedVM
 			m.runDuration = RunDurationWorkspace
 			m.nameMode = nameModeNewVM
@@ -626,7 +659,7 @@ func (m model) handleTemplateActionKey(key string) (tea.Model, tea.Cmd) {
 			m.message = ""
 			m = m.goToWithCursor(screenName, 0)
 		case "run read-only":
-			m.flow = flowRunTemplateReadOnly
+			m = m.beginRunFlow(flowRunTemplateReadOnly)
 			m = m.goToWithCursor(screenFolder, indexFolder(m.folderAccess))
 		case "export":
 			m.flow = flowExportVM
@@ -669,6 +702,54 @@ func (m model) handleChoiceKey(key string, count int, selectFn func(model) model
 		m = selectFn(m)
 	case "esc", "backspace", "h", "left":
 		m = m.goBack()
+	}
+	return m, nil
+}
+
+func (m model) handleHostConnectionsKey(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "c":
+		m.clipboard = !m.clipboard
+		return m, nil
+	case "a":
+		m.guestAudio = !m.guestAudio
+		return m, nil
+	case "p":
+		m.projectPathInput = m.selectedProjectPath()
+		m.projectPathCursor = runeCount(m.projectPathInput)
+		m.message = ""
+		m = m.goToWithCursor(screenProjectFolderPath, 0)
+		return m, nil
+	}
+	return m.handleChoiceKey(key, len(FolderAccesses), func(m model) model {
+		m.folderAccess = FolderAccesses[m.cursor]
+		return m.goToWithCursor(screenNetwork, indexNetwork(m.networkAccess))
+	})
+}
+
+func (m model) handleProjectFolderPathKey(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "enter":
+		resolved, err := m.host.ResolveProjectDirectory(m.projectPathInput)
+		if err != nil {
+			m.message = err.Error()
+			return m, nil
+		}
+		m.projectPath = resolved
+		m.projectPathInput = resolved
+		m.projectPathCursor = runeCount(resolved)
+		m.message = ""
+		m = m.goBack()
+		return m, nil
+	case "esc":
+		m = m.goBack()
+		return m, nil
+	}
+	value, cursor, handled := editTextField(m.projectPathInput, m.projectPathCursor, key, anyPrintableRune)
+	if handled {
+		m.projectPathInput = value
+		m.projectPathCursor = cursor
+		m.message = ""
 	}
 	return m, nil
 }
@@ -814,9 +895,9 @@ func (m model) handleLANCIDRKey(key string) (tea.Model, tea.Cmd) {
 func (m model) handleLANCIDRTextKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "enter":
-		cidr := strings.TrimSpace(m.lanInput)
-		if !validCIDR(cidr) {
-			m.message = "Enter a CIDR like 192.168.1.0/24."
+		cidr, err := normalizePrivateIPv4CIDR(m.lanInput)
+		if err != nil {
+			m.message = err.Error()
 			return m, nil
 		}
 		return m.addLANCIDRAndReview(cidr)
@@ -913,7 +994,9 @@ func (m model) handleReviewKey(key string) (tea.Model, tea.Cmd) {
 			m.reviewScroll--
 		}
 	case "down", "j":
-		m.reviewScroll++
+		if m.reviewScroll < m.reviewMaxScroll() {
+			m.reviewScroll++
+		}
 	case "g":
 		m.reviewScroll = 0
 	case "c":
@@ -1013,6 +1096,29 @@ func (m model) executeCurrentStepCmd() tea.Cmd {
 	index := m.executeIndex
 	step := m.plan.Steps[index]
 	tart := m.tart
+	if step.Kind == CommandStepRun && (m.plan.Review.FolderAccess == FolderReadFolder || m.plan.Review.FolderAccess == FolderEditFolder) {
+		resolved, err := m.host.ResolveProjectDirectory(m.plan.Review.ProjectPath)
+		if err != nil {
+			return func() tea.Msg { return executeStepFinishedMsg{index: index, err: err} }
+		}
+		if resolved != m.plan.Review.ProjectPath {
+			err := fmt.Errorf("project folder changed after review: %s", m.plan.Review.ProjectPath)
+			return func() tea.Msg { return executeStepFinishedMsg{index: index, err: err} }
+		}
+	}
+	if step.Kind == CommandStepRun && len(m.plan.Review.VolumePaths) > 0 {
+		if m.volumeLister == nil {
+			err := fmt.Errorf("mounted-volume validation is unavailable")
+			return func() tea.Msg { return executeStepFinishedMsg{index: index, err: err} }
+		}
+		mounted, err := m.volumeLister.ListHostVolumes()
+		if err != nil {
+			return func() tea.Msg { return executeStepFinishedMsg{index: index, err: err} }
+		}
+		if err := verifyReviewedVolumes(m.plan.Review.VolumePaths, m.plan.Review.VolumeIDs, mounted); err != nil {
+			return func() tea.Msg { return executeStepFinishedMsg{index: index, err: err} }
+		}
+	}
 	if step.Kind == CommandStepRun && usesRealTart(tart) {
 		cmd := exec.Command(step.Args[0], step.Args[1:]...)
 		return tea.ExecProcess(cmd, func(err error) tea.Msg {
@@ -1104,6 +1210,10 @@ func (m model) handleExecuteStepFinished(msg executeStepFinishedMsg) (tea.Model,
 func (m *model) applySuccessfulStepEffects(step CommandStep) error {
 	if m.plan.HasTemporaryVM && step.Kind == CommandStepClone {
 		m.temporaryVMExists = true
+		m.cfg.AddPendingCleanup(m.plan.TemporaryVM)
+		if err := SaveConfig(m.cfgPath, m.cfg); err != nil {
+			return fmt.Errorf("save pending cleanup: %w", err)
+		}
 	}
 	if m.plan.HasTemporaryVM && step.Kind == CommandStepDeleteTemporaryVM {
 		m.cfg.RemovePendingCleanup(m.plan.TemporaryVM)
@@ -1132,8 +1242,11 @@ func (m *model) applyCompletedPlanEffects() error {
 		if name != "" {
 			m.cfg.SetLastRun(name, LastRunConfig{
 				FolderAccess:  m.plan.Review.FolderAccess,
+				ProjectPath:   m.plan.Review.ProjectPath,
 				NetworkAccess: m.plan.Review.NetworkAccess,
 				VolumePaths:   append([]string(nil), m.plan.Review.VolumePaths...),
+				Clipboard:     m.plan.Review.Clipboard,
+				GuestAudio:    m.plan.Review.GuestAudio,
 				At:            time.Now().Format(time.RFC3339),
 			})
 			if err := SaveConfig(m.cfgPath, m.cfg); err != nil {
@@ -1196,6 +1309,9 @@ func (m model) executionReturnName() string {
 	if m.plan.HasTemporaryVM {
 		return m.selectedTemplate.Name
 	}
+	if m.plan.CreatedVM != "" {
+		return m.plan.CreatedVM
+	}
 	return m.selectedVM.Name
 }
 
@@ -1209,8 +1325,12 @@ func (m *model) preparePlan() error {
 func (m model) launchpadIntent() LaunchpadIntent {
 	intent := LaunchpadIntent{
 		FolderAccess:  m.folderAccess,
+		ProjectPath:   m.selectedProjectPath(),
 		NetworkAccess: m.networkAccess,
+		Clipboard:     m.clipboard,
+		GuestAudio:    m.guestAudio,
 		VolumePaths:   m.selectedVolumePaths(),
+		VolumeIDs:     m.selectedVolumeIDs(),
 		ExistingVMs:   m.vms,
 	}
 	switch m.flow {
@@ -1223,12 +1343,6 @@ func (m model) launchpadIntent() LaunchpadIntent {
 	case flowNewFromTemplate:
 		intent.Kind = IntentNewFromTemplate
 		intent.Template = m.selectedTemplate
-		if intent.Template.Name == "" {
-			templates := m.templates()
-			if len(templates) > 0 {
-				intent.Template = templates[0]
-			}
-		}
 		intent.NameInput = m.nameInput
 		intent.RunDuration = m.runDuration
 	}
@@ -1300,6 +1414,8 @@ func (m model) render() string {
 		return m.renderName()
 	case screenFolder:
 		return m.renderFolder()
+	case screenProjectFolderPath:
+		return m.renderProjectFolderPath()
 	case screenNetwork:
 		return m.renderNetwork()
 	case screenLANCIDR:
@@ -1325,8 +1441,7 @@ func (m model) render() string {
 	}
 }
 
-// renderHome lists the local Tart VMs. Details about the highlighted VM live in
-// the rail, so the list itself stays one scannable row per VM.
+// renderHome lists the local Tart VMs as one scannable row per VM.
 func (m model) renderHome() string {
 	glyphs := m.glyphs()
 	items := m.filteredHomeItems()
@@ -1493,12 +1608,54 @@ func (m model) renderName() string {
 func (m model) renderFolder() string {
 	choices := folderAccessChoices()
 	cursor := clampCursor(m.cursor, len(choices))
+	glyphs := m.glyphs()
+	lines := []string{
+		textStyle.Render("What host connections should " + m.flowTargetName() + " receive?"),
+		"",
+		sectionHeading("PROJECT FOLDER"),
+		"",
+	}
+	for i, choice := range choices {
+		label := fixedDisplayWidth(choice.Label, 18)
+		description := mutedStyle.Render(choice.Description)
+		if i == cursor {
+			label = selectedStyle.Render(label)
+			description = textStyle.Render(choice.Description)
+		}
+		lines = append(lines, cursorCellFor(glyphs, i == cursor)+label+" "+description)
+	}
+	lines = append(lines,
+		"",
+		boundaryLine("path", truncateLeft(m.selectedProjectPath(), max(24, m.mainPaneWidth()-18))),
+		boundaryLine("clipboard", connectionToggleValue(m.clipboard, "host and guest clipboard contents can cross the boundary")),
+		boundaryLine("guest audio", connectionToggleValue(m.guestAudio, "guest audio plays through the host")),
+	)
 	return m.renderFrame(framePage{
-		Trail: append(m.flowTrail(), "folder"),
+		Trail: append(m.flowTrail(), "host connections"),
 		Step:  m.stepIndicator(),
-		Body:  choiceListBody(m.glyphs(), "What host folder access should "+m.flowTargetName()+" receive?", choices, cursor),
-		Hints: listHints(),
+		Body:  strings.Join(lines, "\n"),
+		Hints: []string{"1-3 choose folder access", "p choose folder", "c clipboard", "a guest audio", "enter continue", "esc back"},
 	})
+}
+
+func (m model) renderProjectFolderPath() string {
+	context := []string{
+		textStyle.Render("Choose the one host project folder this VM may access."),
+		mutedStyle.Render("Launchpad resolves symlinks and rejects broad or credential-bearing roots."),
+	}
+	return m.renderFrame(framePage{
+		Trail: append(m.flowTrail(), "host connections", "project folder"),
+		Step:  m.stepIndicator(),
+		Body:  promptBody("PROJECT FOLDER", m.projectPathInput, m.projectPathCursor, context, "absolute path or ~/path"),
+		Hints: promptHints(),
+	})
+}
+
+func connectionToggleValue(enabled bool, consequence string) string {
+	if !enabled {
+		return mutedStyle.Render("off")
+	}
+	return warningStyle.Render("on") + "  " + textStyle.Render(consequence)
 }
 
 func (m model) renderNetwork() string {
@@ -1633,7 +1790,7 @@ func (m model) renderVolumeChoice(glyphs glyphSet, volume HostVolume, selected b
 // renderReview is the last screen before anything runs. It answers two
 // questions in a fixed order: what will this run touch, and what exact command
 // produces that. Everything else on the screen is subordinate to those blocks.
-func (m model) renderReview() string {
+func (m model) reviewLines() []string {
 	glyphs := m.glyphs()
 	var lines []string
 	for _, warning := range m.plan.Warnings {
@@ -1674,7 +1831,11 @@ func (m model) renderReview() string {
 	} else if m.planRequiresExplicitYes() {
 		lines = append(lines, "", dangerStyle.Render("This cannot be undone. Press y to delete "+m.plan.DeleteVM+"."))
 	}
-	lines = m.reviewWindow(lines)
+	return lines
+}
+
+func (m model) renderReview() string {
+	lines := m.reviewWindow(m.reviewLines())
 
 	return m.renderFrame(framePage{
 		Trail:  append(m.flowTrail(), "review"),
@@ -1785,7 +1946,6 @@ func (m model) renderCommandLedger(step CommandStep) []string {
 	return out
 }
 
-
 func (m model) renderProgressBar() string {
 	done := 0
 	for _, state := range m.executeStates {
@@ -1849,6 +2009,14 @@ func (m model) reviewWindow(lines []string) []string {
 	return window
 }
 
+func (m model) reviewMaxScroll() int {
+	available := m.bodyHeight()
+	if available <= 0 {
+		return 0
+	}
+	return max(0, len(m.reviewLines())-available)
+}
+
 func (m model) templates() []VM {
 	var out []VM
 	for _, vm := range m.vms {
@@ -1885,6 +2053,55 @@ func (m model) selectedVolumePaths() []string {
 		}
 	}
 	return paths
+}
+
+func (m model) selectedVolumeIDs() map[string]string {
+	ids := map[string]string{}
+	for _, volume := range m.hostVolumes {
+		if m.selectedVolumePath[volume.Path] {
+			ids[volume.Path] = volume.ID
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	return ids
+}
+
+func verifyReviewedVolumes(paths []string, expectedIDs map[string]string, mounted []HostVolume) error {
+	mountedByPath := make(map[string]HostVolume, len(mounted))
+	for _, volume := range mounted {
+		mountedByPath[volume.Path] = volume
+	}
+	for _, path := range paths {
+		expectedID := expectedIDs[path]
+		if expectedID == "" {
+			return fmt.Errorf("mounted volume was not identified during review: %s", path)
+		}
+		volume, ok := mountedByPath[path]
+		if !ok {
+			return fmt.Errorf("mounted volume is no longer available: %s", path)
+		}
+		if volume.ID != expectedID {
+			return fmt.Errorf("mounted volume changed after review: %s", path)
+		}
+	}
+	return nil
+}
+
+func (m *model) reconcileCompletedCleanup() bool {
+	present := make(map[string]bool, len(m.vms))
+	for _, vm := range m.vms {
+		present[vm.Name] = true
+	}
+	changed := false
+	for _, name := range append([]string(nil), m.cfg.PendingCleanup...) {
+		if !present[name] {
+			m.cfg.RemovePendingCleanup(name)
+			changed = true
+		}
+	}
+	return changed
 }
 
 func (m model) filteredHomeItems() []homeItem {
@@ -1973,7 +2190,7 @@ func (m model) returnHome() model {
 	m.screen = screenHome
 	m.mode = modeNormal
 	m.backStack = nil
-	m.cursor = clampCursor(m.cursor, len(m.vms))
+	m.cursor = clampCursor(m.cursor, len(m.filteredHomeItems()))
 	return m
 }
 
@@ -1981,11 +2198,60 @@ func (m model) returnHomeToVM(name string) model {
 	m.screen = screenHome
 	m.mode = modeNormal
 	m.backStack = nil
-	if name != "" {
-		m.cursor = indexVM(m.vms, name)
+	m.homeFocusVM = name
+	if m.focusHomeVM(name) {
+		m.homeFocusVM = ""
 	}
-	m.cursor = clampCursor(m.cursor, len(m.vms))
+	items := m.filteredHomeItems()
+	m.cursor = clampCursor(m.cursor, len(items))
 	return m
+}
+
+func (m *model) focusHomeVM(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i, item := range m.filteredHomeItems() {
+		if item.vm.Name == name {
+			m.cursor = i
+			return true
+		}
+	}
+	for _, vm := range m.vms {
+		if vm.Name == name {
+			m.homeFilter = ""
+			return m.focusHomeVM(name)
+		}
+	}
+	return false
+}
+
+func (m model) beginRunFlow(next flow) model {
+	m.flow = next
+	m.folderAccess = FolderNoFolder
+	m.projectPath = m.currentPathLine()
+	m.projectPathInput = m.projectPath
+	m.projectPathCursor = runeCount(m.projectPath)
+	m.networkAccess = NetworkOffline
+	m.clipboard = false
+	m.guestAudio = false
+	m.selectedVolumePath = map[string]bool{}
+	m.missingRunVolumes = nil
+	m.reviewScroll = 0
+	return m
+}
+
+func cloneVMConfigs(source map[string]VMConfig) map[string]VMConfig {
+	clone := make(map[string]VMConfig, len(source))
+	for name, vm := range source {
+		if vm.LastRun != nil {
+			lastRun := *vm.LastRun
+			lastRun.VolumePaths = append([]string(nil), vm.LastRun.VolumePaths...)
+			vm.LastRun = &lastRun
+		}
+		clone[name] = vm
+	}
+	return clone
 }
 
 func (m model) returnHomeForCurrentFlow() model {
@@ -2027,7 +2293,7 @@ func (m model) goBack() model {
 // one place means a screen can never be entered with the wrong capture mode.
 func (m model) modeFor(next screen) inputMode {
 	switch next {
-	case screenName, screenImportPath, screenExportPath, screenLANCIDRText:
+	case screenName, screenProjectFolderPath, screenImportPath, screenExportPath, screenLANCIDRText:
 		return modeInsert
 	case screenReview:
 		if m.planRequiresTypedConfirm() {
@@ -2098,10 +2364,6 @@ func isNameRune(r rune) bool {
 
 func isCIDRRune(r rune) bool {
 	return (r >= '0' && r <= '9') || r == '.' || r == '/'
-}
-
-func validCIDR(value string) bool {
-	return parseCIDR(value)
 }
 
 type lanCIDRChoice struct {
@@ -2226,18 +2488,16 @@ func (m model) keyGroups() []keyGroup {
 	})
 }
 
-// renderCompletedGrantLedger is the boundary manifest shown on review: folder,
-// current path, and volumes braced together as the one host access grant, then
-// network access, then the two things Launchpad always turns off.
+// renderCompletedGrantLedger is the boundary manifest shown on review.
 func (m model) renderCompletedGrantLedger() string {
 	glyphs := m.glyphs()
 	return strings.Join([]string{
 		boundaryLine(glyphs.GrantTop+" folder", folderReviewDescription(m.plan.Review.FolderAccess)),
-		boundaryLine("  here", m.grantPathValue()),
+		boundaryLine("  path", m.grantPathValue()),
 		boundaryLine(glyphs.GrantBottom+" volumes", m.volumeReviewDescription()),
 		boundaryLine("  network", networkReviewDescription(m.cfg, m.plan.Review.NetworkAccess)),
-		boundaryLine("  clipboard", mutedStyle.Render(m.plan.Review.Clipboard)),
-		boundaryLine("  audio", mutedStyle.Render(m.plan.Review.Audio)),
+		boundaryLine("  clipboard", connectionToggleValue(m.plan.Review.Clipboard, "host and guest clipboard contents can cross the boundary")),
+		boundaryLine("  guest audio", connectionToggleValue(m.plan.Review.GuestAudio, "guest audio plays through the host")),
 	}, "\n")
 }
 
@@ -2247,241 +2507,14 @@ func (m model) grantPathValue() string {
 	if m.plan.Review.FolderAccess == FolderNoFolder {
 		return mutedStyle.Render("no host folder in this grant")
 	}
-	path := m.currentPathLine()
+	path := m.plan.Review.ProjectPath
 	if path == "" {
-		return mutedStyle.Render("current directory")
+		return mutedStyle.Render("no project folder selected")
 	}
-	if m.plan.Review.FolderAccess == FolderEditHere {
+	if m.plan.Review.FolderAccess == FolderEditFolder {
 		return warningStyle.Render(path)
 	}
 	return textStyle.Render(path)
-}
-
-// boundaryRail is the always-visible manifest beside every step of a run flow.
-// Decided boundaries show their grant badge, the step in progress is marked,
-// and anything still unchosen stays empty rather than guessing a default.
-func (m model) boundaryRail() string {
-	glyphs := m.glyphs()
-	width := railPaneWidth(m.frameWidth())
-	rows := []railRow{
-		{Label: glyphs.GrantTop + " folder", Value: m.railFolderValue(glyphs)},
-		{Label: glyphs.GrantBottom + " volumes", Value: m.railVolumesValue(glyphs)},
-		{Label: "network", Value: m.railNetworkValue(glyphs)},
-		{Label: "clipboard", Value: mutedStyle.Render("off")},
-		{Label: "audio", Value: mutedStyle.Render("off")},
-	}
-	if m.flow == flowNewFromTemplate {
-		rows = append([]railRow{{Label: "duration", Value: m.railDurationValue(glyphs)}}, rows...)
-	}
-	if m.flow == flowRunTemplateReadOnly {
-		rows = append(rows, railRow{Label: "root disk", Value: mutedStyle.Render("read-only")})
-	}
-	return railView(glyphs, "BOUNDARY", m.railSubtitle(), rows, width)
-}
-
-// railSubtitle names what the boundary is being assembled for.
-func (m model) railSubtitle() []string {
-	name := m.flowTargetName()
-	kind := m.selectedVM.Kind
-	if kind == "" {
-		kind = VMKindUnmarked
-	}
-	subtitle := []string{textStyle.Render(truncate(name, railPaneWidth(m.frameWidth())-1))}
-	switch m.flow {
-	case flowNewFromTemplate:
-		subtitle = append(subtitle, mutedStyle.Render("from "+truncate(m.selectedTemplate.Name, 20)))
-	case flowRunTemplateReadOnly:
-		subtitle = append(subtitle, mutedStyle.Render("template, read-only run"))
-	default:
-		subtitle = append(subtitle, mutedStyle.Render(string(kind)))
-	}
-	return subtitle
-}
-
-func (m model) railFolderValue(glyphs glyphSet) string {
-	if m.screen == screenFolder {
-		return selectedStyle.Render(glyphs.Arrow + " choosing")
-	}
-	if m.screenIsBefore(screenFolder) {
-		return mutedStyle.Render(glyphs.Empty)
-	}
-	return grantBadge(folderAccessChoice(m.folderAccess))
-}
-
-func (m model) railVolumesValue(glyphs glyphSet) string {
-	if m.screen == screenVolumes {
-		return selectedStyle.Render(glyphs.Arrow + " choosing")
-	}
-	if m.screen != screenReview && m.screen != screenExecute {
-		if len(m.hostVolumes) == 0 {
-			return mutedStyle.Render("none mounted")
-		}
-		return mutedStyle.Render(glyphs.Empty)
-	}
-	paths := m.selectedVolumePaths()
-	if len(paths) == 0 {
-		return mutedStyle.Render("none")
-	}
-	return warningStyle.Render(countLabel(len(paths), "volume", "volumes") + " read-write")
-}
-
-func (m model) railNetworkValue(glyphs glyphSet) string {
-	switch m.screen {
-	case screenNetwork:
-		return selectedStyle.Render(glyphs.Arrow + " choosing")
-	case screenLANCIDR, screenLANCIDRText:
-		return grantBadge(networkAccessChoice(m.cfg, m.networkAccess)) + mutedStyle.Render(" CIDR?")
-	case screenFolder, screenName, screenRunDuration:
-		return mutedStyle.Render(glyphs.Empty)
-	default:
-		return grantBadge(networkAccessChoice(m.cfg, m.networkAccess))
-	}
-}
-
-func (m model) railDurationValue(glyphs glyphSet) string {
-	if m.screen == screenRunDuration {
-		return selectedStyle.Render(glyphs.Arrow + " choosing")
-	}
-	if m.runDuration == "" {
-		return mutedStyle.Render(glyphs.Empty)
-	}
-	for _, choice := range runDurationChoices() {
-		if choice.Label == string(m.runDuration) {
-			return grantBadge(choice)
-		}
-	}
-	return textStyle.Render(string(m.runDuration))
-}
-
-// screenIsBefore reports whether the flow has not reached a screen yet, so the
-// rail can leave later boundaries empty instead of showing a default as fact.
-func (m model) screenIsBefore(target screen) bool {
-	order := map[screen]int{
-		screenRunDuration: 1,
-		screenName:        2,
-		screenFolder:      3,
-		screenNetwork:     4,
-		screenLANCIDR:     5,
-		screenLANCIDRText: 5,
-		screenVolumes:     6,
-		screenReview:      7,
-		screenExecute:     8,
-	}
-	current, ok := order[m.screen]
-	if !ok {
-		return false
-	}
-	return current < order[target]
-}
-
-// selectionRail describes the VM under the cursor plus the host facts that
-// decide what a run could touch.
-func (m model) selectionRail() string {
-	glyphs := m.glyphs()
-	width := railPaneWidth(m.frameWidth())
-	vm := m.railVM()
-
-	var rows []railRow
-	if vm.Name != "" {
-		kind := vm.Kind
-		if kind == "" {
-			kind = VMKindUnmarked
-		}
-		state := mutedStyle.Render(vm.State)
-		if vm.Running {
-			state = successStyle.Render("running")
-		}
-		rows = append(rows,
-			railRow{Label: "kind", Value: badge(string(kind))},
-			railRow{Label: "state", Value: state},
-			railRow{Label: "last run", Value: m.railLastRun(vm.Name)},
-		)
-	}
-	rows = append(rows,
-		railRow{Label: "here", Value: textStyle.Render(truncateLeft(m.currentPathLine(), width-railLabelColumn-2))},
-		railRow{Label: "volumes", Value: mutedStyle.Render(countLabel(len(m.hostVolumes), "volume", "volumes") + " mounted")},
-	)
-	if len(m.cfg.PendingCleanup) > 0 {
-		rows = append(rows, railRow{
-			Label: "cleanup",
-			Value: warningStyle.Render(countLabel(len(m.cfg.PendingCleanup), "VM", "VMs") + " pending"),
-		})
-	}
-
-	title := "HOST"
-	subtitle := []string{mutedStyle.Render("no VM selected")}
-	if vm.Name != "" {
-		title = "SELECTED VM"
-		subtitle = []string{textStyle.Render(truncate(vm.Name, width-1))}
-	}
-	return railView(glyphs, title, subtitle, rows, width)
-}
-
-// railVM is the VM the rail describes: the row under the cursor on the VM list,
-// the chosen VM anywhere else.
-func (m model) railVM() VM {
-	if m.screen == screenHome {
-		items := m.filteredHomeItems()
-		if len(items) == 0 {
-			return VM{}
-		}
-		return items[clampCursor(m.cursor, len(items))].vm
-	}
-	return m.selectedVM
-}
-
-func (m model) railLastRun(name string) string {
-	last, ok := m.cfg.LastRunFor(name)
-	if !ok {
-		return mutedStyle.Render("never from here")
-	}
-	parts := []string{string(last.FolderAccess), string(last.NetworkAccess)}
-	if at, err := time.Parse(time.RFC3339, last.At); err == nil {
-		parts = append(parts, humanAge(time.Since(at))+" ago")
-	}
-	return mutedStyle.Render(strings.Join(parts, " · "))
-}
-
-// planRail summarizes the plan itself on review and execute: what it will
-// produce, and which host prerequisites it depends on.
-func (m model) planRail() string {
-	glyphs := m.glyphs()
-	width := railPaneWidth(m.frameWidth())
-	rows := []railRow{{Label: "steps", Value: textStyle.Render(countLabel(len(m.plan.Steps), "command", "commands"))}}
-
-	switch {
-	case m.plan.ExportPath != "":
-		rows = append(rows, railRow{Label: "writes", Value: textStyle.Render(truncateLeft(m.plan.ExportPath, width-railLabelColumn-2))})
-		rows = append(rows, railRow{Label: "state", Value: warningStyle.Render("may be sensitive")})
-	case m.plan.ImportPath != "":
-		rows = append(rows, railRow{Label: "reads", Value: textStyle.Render(truncateLeft(m.plan.ImportPath, width-railLabelColumn-2))})
-		rows = append(rows, railRow{Label: "creates", Value: textStyle.Render(truncate(m.plan.ImportVMName, width-railLabelColumn-2))})
-	case m.plan.DeleteVM != "":
-		rows = append(rows, railRow{Label: "deletes", Value: dangerStyle.Render(truncate(m.plan.DeleteVM, width-railLabelColumn-2))})
-	case m.plan.RenameTo != "":
-		rows = append(rows, railRow{Label: "renames", Value: textStyle.Render(truncate(m.plan.RenameTo, width-railLabelColumn-2))})
-	}
-	if m.plan.HasTemporaryVM {
-		rows = append(rows, railRow{Label: "cleanup", Value: textStyle.Render("deletes " + truncate(m.plan.TemporaryVM, 14))})
-	}
-	if planRequiresSoftnet(m.plan) {
-		rows = append(rows, railRow{Label: "softnet", Value: m.softnetRailValue()})
-	}
-	if m.plan.ShowsBoundaries() {
-		return railView(glyphs, "PLAN", m.railSubtitle(), rows, width)
-	}
-	return railView(glyphs, "PLAN", []string{textStyle.Render(truncate(m.plan.Title, width-1))}, rows, width)
-}
-
-func (m model) softnetRailValue() string {
-	switch {
-	case !m.softnetStatusKnown:
-		return mutedStyle.Render("checking")
-	case m.softnetIsReady:
-		return successStyle.Render("ready")
-	default:
-		return warningStyle.Render("needs setup")
-	}
 }
 
 // flowTrail is the breadcrumb prefix for every screen inside a flow.
@@ -2537,7 +2570,7 @@ func (m model) stepIndicator() string {
 	}
 	current := 0
 	switch m.screen {
-	case screenFolder:
+	case screenFolder, screenProjectFolderPath:
 		current = 1
 	case screenNetwork:
 		current = 2
@@ -2644,6 +2677,13 @@ func (m model) currentPathLine() string {
 		return ""
 	}
 	return cwd
+}
+
+func (m model) selectedProjectPath() string {
+	if strings.TrimSpace(m.projectPath) != "" {
+		return strings.TrimSpace(m.projectPath)
+	}
+	return m.currentPathLine()
 }
 
 func commandWrapWidth(terminalWidth int) int {

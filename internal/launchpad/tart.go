@@ -94,6 +94,10 @@ func ExecutePlan(stdout io.Writer, stderr io.Writer, tart Tart, cfg Config, cfgP
 		}
 		if plan.HasTemporaryVM && step.Kind == CommandStepClone {
 			temporaryVMExists = true
+			cfg.AddPendingCleanup(plan.TemporaryVM)
+			if err := SaveConfig(cfgPath, cfg); err != nil {
+				return fmt.Errorf("save pending cleanup: %w", err)
+			}
 		}
 		if plan.HasTemporaryVM && step.Kind == CommandStepDeleteTemporaryVM {
 			cfg.RemovePendingCleanup(plan.TemporaryVM)

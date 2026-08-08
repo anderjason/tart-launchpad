@@ -17,8 +17,14 @@ VM kinds:
 Folder access:
 
 - `no-folder`: mount no host folder
-- `read-here`: mount current folder read-only
-- `edit-here`: mount current folder read-write
+- `read-folder`: mount the selected project folder read-only
+- `edit-folder`: mount the selected project folder read-write
+- the project folder initially uses the current directory and may be replaced with another explicit host directory
+
+Host integrations:
+
+- clipboard sharing is an independent per-run choice and is off by default
+- guest audio pass-through to the host is an independent per-run choice and is off by default
 
 Volume access:
 
@@ -43,7 +49,9 @@ Run duration:
 ## Required Behavior
 
 - Every run shows the exact `tart` command before execution.
-- Workspaces and unmarked VMs can be run after choosing folder and network access.
+- Workspaces and unmarked VMs can be run after choosing host connections and network access.
+- Folder grants store an explicit resolved project-folder path separately from the access mode.
+- Clipboard and guest audio choices are shown with their consequences during review.
 - If mounted non-system volumes are connected, the TUI shows a volume checklist after network access and before review.
 - Volume choices are all off by default and selected volumes are attached read-write.
 - Templates are guarded from normal runs.
@@ -67,7 +75,7 @@ Before every Launchpad-shaped run, Launchpad configures the VM:
 set <vm> --cpu 4 --memory 8192 --display 1280x800
 ```
 
-All Launchpad-shaped runs include:
+Launchpad-shaped runs add these flags when the corresponding connection is off:
 
 ```text
 --no-clipboard
@@ -78,8 +86,8 @@ Folder access:
 
 ```text
 no-folder   no --dir flag
-read-here   --dir=project:<current directory>:ro
-edit-here   --dir=project:<current directory>
+read-folder --dir=project:<selected project folder>:ro
+edit-folder --dir=project:<selected project folder>
 ```
 
 Selected volumes:

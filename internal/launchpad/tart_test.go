@@ -174,10 +174,11 @@ func TestExecutePlanReturnsSaveFailure(t *testing.T) {
 type fakeTart struct {
 	failAtLabel string
 	calls       [][]string
+	listVMs     []VM
 }
 
 func (f *fakeTart) ListVMs() ([]VM, error) {
-	return nil, nil
+	return append([]VM(nil), f.listVMs...), nil
 }
 
 func (f *fakeTart) RunStep(stdout io.Writer, stderr io.Writer, step CommandStep) error {

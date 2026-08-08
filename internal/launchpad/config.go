@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type Config struct {
@@ -33,8 +34,11 @@ type DefaultsConfig struct {
 
 type LastRunConfig struct {
 	FolderAccess  FolderAccess  `json:"folder_access"`
+	ProjectPath   string        `json:"project_path,omitempty"`
 	NetworkAccess NetworkAccess `json:"network_access"`
 	VolumePaths   []string      `json:"volume_paths,omitempty"`
+	Clipboard     bool          `json:"clipboard,omitempty"`
+	GuestAudio    bool          `json:"guest_audio,omitempty"`
 	At            string        `json:"at"`
 }
 
@@ -74,7 +78,8 @@ func LoadConfig() (Config, string, error) {
 
 func SaveConfig(path string, cfg Config) error {
 	cfg.Normalize()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	directory := filepath.Dir(path)
+	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return err
 	}
 	bytes, err := json.MarshalIndent(cfg, "", "  ")
@@ -82,7 +87,45 @@ func SaveConfig(path string, cfg Config) error {
 		return err
 	}
 	bytes = append(bytes, '\n')
-	return os.WriteFile(path, bytes, 0o600)
+	temporary, err := os.CreateTemp(directory, ".config-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temporary config: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	removeTemporary := true
+	defer func() {
+		if removeTemporary {
+			_ = os.Remove(temporaryPath)
+		}
+	}()
+	if err := temporary.Chmod(0o600); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("secure temporary config: %w", err)
+	}
+	if _, err := temporary.Write(bytes); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("write temporary config: %w", err)
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("sync temporary config: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close temporary config: %w", err)
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return fmt.Errorf("replace config: %w", err)
+	}
+	removeTemporary = false
+	directoryHandle, err := os.Open(directory)
+	if err != nil {
+		return fmt.Errorf("open config directory: %w", err)
+	}
+	defer directoryHandle.Close()
+	if err := directoryHandle.Sync(); err != nil {
+		return fmt.Errorf("sync config directory: %w", err)
+	}
+	return nil
 }
 
 func ConfigPath() (string, error) {
@@ -118,6 +161,8 @@ func (c *Config) Normalize() {
 		if vm.LastRun != nil {
 			vm.LastRun.NetworkAccess = normalizeNetworkAccess(vm.LastRun.NetworkAccess)
 			if !vm.LastRun.FolderAccess.Valid() || !vm.LastRun.NetworkAccess.Valid() {
+				vm.LastRun = nil
+			} else if vm.LastRun.FolderAccess != FolderNoFolder && strings.TrimSpace(vm.LastRun.ProjectPath) == "" {
 				vm.LastRun = nil
 			}
 		}
@@ -182,9 +227,14 @@ func nextKind(kind VMKind) VMKind {
 }
 
 func (c *Config) RenameVMKind(oldName string, newName string) {
-	kind := c.KindFor(oldName)
-	c.SetKind(oldName, VMKindUnmarked)
-	c.SetKind(newName, kind)
+	c.Normalize()
+	vm, ok := c.VMs[oldName]
+	if !ok {
+		return
+	}
+	delete(c.VMs, oldName)
+	c.VMs[newName] = vm
+	c.RemovePendingCleanup(oldName)
 }
 
 func (c *Config) ForgetVM(name string) {

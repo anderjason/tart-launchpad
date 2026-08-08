@@ -25,12 +25,24 @@ A VM kind for a local Tart VM that Launchpad has not categorized.
 _Avoid_: unknown VM
 
 **Host access grant**:
-The combined folder and mounted-volume access given to a Launchpad-shaped run.
+The combined project-folder, mounted-volume, clipboard, and guest-audio connections given to a Launchpad-shaped run.
 _Avoid_: mount policy, storage profile
 
 **Folder access**:
-The current-directory access choice for a Launchpad-shaped run.
+The read/write choice for the selected project folder in a Launchpad-shaped run.
 _Avoid_: directory mode
+
+**Project folder**:
+The one explicit host directory shared with a Launchpad-shaped run. It initially uses the launch directory but can be replaced.
+_Avoid_: here, current directory
+
+**Clipboard sharing**:
+The per-run choice that lets clipboard contents cross between the host and guest.
+_Avoid_: clipboard access
+
+**Guest audio**:
+The per-run choice that lets guest audio play through the host.
+_Avoid_: microphone access
 
 **Volume access**:
 The optional mounted-host-volume access chosen for a Launchpad-shaped run.

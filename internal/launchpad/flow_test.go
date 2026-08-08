@@ -9,7 +9,7 @@ func TestLaunchpadIntentBuildsRunPlanFromHostEnvironment(t *testing.T) {
 	intent := LaunchpadIntent{
 		Kind:          IntentRunExisting,
 		VM:            VM{Name: "dev", Kind: VMKindWorkspace},
-		FolderAccess:  FolderReadHere,
+		FolderAccess:  FolderReadFolder,
 		NetworkAccess: NetworkHost,
 		VolumePaths:   []string{"/Volumes/External SSD"},
 	}
@@ -25,6 +25,19 @@ func TestLaunchpadIntentBuildsRunPlanFromHostEnvironment(t *testing.T) {
 	want := []string{"tart", "run", "--no-clipboard", "--no-audio", "--dir=project:/tmp/project:ro", "--net-host", "--dir=volume-external-ssd:/Volumes/External SSD", "dev"}
 	if !reflect.DeepEqual(plan.Steps[1].Args, want) {
 		t.Fatalf("run args\n got %#v\nwant %#v", plan.Steps[1].Args, want)
+	}
+}
+
+func TestLaunchpadIntentRejectsWritableTemplateRun(t *testing.T) {
+	intent := LaunchpadIntent{
+		Kind:          IntentRunExisting,
+		VM:            VM{Name: "base", Kind: VMKindTemplate},
+		FolderAccess:  FolderNoFolder,
+		NetworkAccess: NetworkOffline,
+	}
+
+	if _, err := intent.BuildPlan(DefaultConfig(), fakeHostEnvironment{currentDirectory: "/tmp/project"}); err == nil {
+		t.Fatal("expected template run to be rejected")
 	}
 }
 

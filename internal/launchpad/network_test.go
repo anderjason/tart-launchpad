@@ -45,3 +45,27 @@ func TestDefaultLANCIDRChoicesAlwaysIncludesFreeText(t *testing.T) {
 		t.Fatalf("last choice = %#v, want free text", choices[len(choices)-1])
 	}
 }
+
+func TestNormalizePrivateIPv4CIDRRejectsInternetWideAndPublicNetworks(t *testing.T) {
+	for _, value := range []string{"0.0.0.0/0", "8.8.8.0/24", "10.0.0.0/7"} {
+		if _, err := normalizePrivateIPv4CIDR(value); err == nil {
+			t.Fatalf("normalizePrivateIPv4CIDR(%q) succeeded; want rejection", value)
+		}
+	}
+}
+
+func TestNormalizePrivateIPv4CIDRRequiresNetworkAddress(t *testing.T) {
+	if _, err := normalizePrivateIPv4CIDR("192.168.1.42/24"); err == nil {
+		t.Fatal("host-address CIDR succeeded; want rejection")
+	}
+}
+
+func TestNormalizePrivateIPv4CIDRAcceptsPrivateNetwork(t *testing.T) {
+	got, err := normalizePrivateIPv4CIDR("172.16.32.0/20")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "172.16.32.0/20" {
+		t.Fatalf("CIDR = %q, want canonical private network", got)
+	}
+}

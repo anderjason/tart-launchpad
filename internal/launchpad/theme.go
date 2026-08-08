@@ -107,9 +107,9 @@ func tintedGrantColor(provenance string) lipgloss.TerminalColor {
 	base := "#E5E7EB"
 	hue := "#22D3EE"
 	switch provenance {
-	case string(FolderReadHere):
+	case string(FolderReadFolder):
 		hue = "#7DD3FC"
-	case string(FolderEditHere), "volume read-write":
+	case string(FolderEditFolder), "volume read-write":
 		hue = "#F59E0B"
 	case string(NetworkOffline):
 		hue = "#71717A"
@@ -121,7 +121,7 @@ func tintedGrantColor(provenance string) lipgloss.TerminalColor {
 		hue = "#34D399"
 	case string(NetworkLANAndInternet):
 		hue = "#DB2777"
-	case "clipboard off", "audio off":
+	case "clipboard off", "guest audio off":
 		return mutedColor
 	}
 	baseColor, err := colorful.Hex(base)
@@ -140,103 +140,55 @@ func tintedGrantColor(provenance string) lipgloss.TerminalColor {
 type glyphSet struct {
 	Cursor      string
 	Chevron     string
-	Rule        string
-	VRule       string
 	Running     string
 	Idle        string
-	Check       string
-	Cross       string
 	Done        string
 	Failed      string
 	Warn        string
 	Bullet      string
 	Arrow       string
-	Flow        string
 	Up          string
 	Down        string
-	CheckboxOn  string
-	CheckboxOff string
 	Checked     string
 	Unchecked   string
 	GrantTop    string
 	GrantBottom string
-	ReadArrow   string
-	WriteArrow  string
-	Empty       string
-	CornerTL    string
-	CornerTR    string
-	CornerBL    string
-	CornerBR    string
-	TeeLeft     string
-	TeeRight    string
 }
 
 var unicodeGlyphSet = glyphSet{
 	Cursor:      "▌",
 	Chevron:     "›",
-	Rule:        "─",
-	VRule:       "│",
 	Running:     "●",
 	Idle:        "·",
-	Check:       "✓",
-	Cross:       "✗",
 	Done:        "✓",
 	Failed:      "✗",
 	Warn:        "▲",
 	Bullet:      "•",
 	Arrow:       "▸",
-	Flow:        "──▶",
 	Up:          "↑",
 	Down:        "↓",
-	CheckboxOn:  "[x]",
-	CheckboxOff: "[ ]",
 	Checked:     "[x]",
 	Unchecked:   "[ ]",
 	GrantTop:    "⎧",
 	GrantBottom: "⎩",
-	ReadArrow:   "──ro──▶",
-	WriteArrow:  "──rw──▶",
-	Empty:       "—",
-	CornerTL:    "╭",
-	CornerTR:    "╮",
-	CornerBL:    "╰",
-	CornerBR:    "╯",
-	TeeLeft:     "┤",
-	TeeRight:    "├",
 }
 
 var asciiGlyphSet = glyphSet{
 	Cursor:      ">",
 	Chevron:     ">",
-	Rule:        "-",
-	VRule:       "|",
 	Running:     "*",
 	Idle:        ".",
-	Check:       "+",
-	Cross:       "x",
 	Done:        "+",
 	Failed:      "x",
 	Warn:        "!",
 	Bullet:      "*",
 	Arrow:       ">",
-	Flow:        "-->",
 	Up:          "^",
 	Down:        "v",
-	CheckboxOn:  "[x]",
-	CheckboxOff: "[ ]",
 	Checked:     "[x]",
 	Unchecked:   "[ ]",
 	GrantTop:    "/",
 	GrantBottom: "\\",
-	ReadArrow:   "--ro-->",
-	WriteArrow:  "--rw-->",
-	Empty:       "-",
-	CornerTL:    "+",
-	CornerTR:    "+",
-	CornerBL:    "+",
-	CornerBR:    "+",
-	TeeLeft:     "|",
-	TeeRight:    "|",
 }
 
 // theme bundles the presentation choices the config can change, so screens

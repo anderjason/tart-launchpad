@@ -1,5 +1,10 @@
 package launchpad
 
+import (
+	"path/filepath"
+	"strings"
+)
+
 type screenFixture struct {
 	cfg     Config
 	vms     []VM
@@ -56,7 +61,18 @@ func (f screenFixture) model() model {
 	if host.currentDirectory == "" {
 		host.currentDirectory = "/tmp/project"
 	}
-	return newModelWithVolumesAndHost(f.cfg, "", f.vms, f.volumes, host)
+	m := newModelWithVolumesAndHost(f.cfg, "", f.vms, f.volumes, host)
+	m.volumeLister = fakeVolumeLister{volumes: f.volumes}
+	return m
+}
+
+type fakeVolumeLister struct {
+	volumes []HostVolume
+	err     error
+}
+
+func (f fakeVolumeLister) ListHostVolumes() ([]HostVolume, error) {
+	return append([]HostVolume(nil), f.volumes...), f.err
 }
 
 type fakeHostEnvironment struct {
@@ -66,6 +82,14 @@ type fakeHostEnvironment struct {
 
 func (f fakeHostEnvironment) CurrentDirectory() (string, error) {
 	return f.currentDirectory, nil
+}
+
+func (f fakeHostEnvironment) ResolveProjectDirectory(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		path = f.currentDirectory
+	}
+	return filepath.Clean(path), nil
 }
 
 func (f fakeHostEnvironment) FileExists(path string) (bool, error) {

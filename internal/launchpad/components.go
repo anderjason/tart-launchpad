@@ -7,13 +7,12 @@ import (
 )
 
 // This file holds the interaction components every screen composes from: a
-// cursor list, a text prompt, a grant choice list, an action list, and the
-// manifest rail. Screens describe what to show; components decide how a row,
-// a cursor, or a prompt behaves.
+// cursor list, a text prompt, a grant choice list, and an action list. Screens
+// describe what to show; components decide how a row, a cursor, or a prompt
+// behaves.
 
 const (
 	choiceBadgeColumn = 20
-	railLabelColumn   = 10
 	ledgerLabelColumn = 10
 )
 
@@ -218,85 +217,6 @@ func boundaryLine(label string, value string) string {
 	return mutedStyle.Render(fixedDisplayWidth(label, ledgerLabelColumn)) + " " + value
 }
 
-type railRow struct {
-	Label string
-	Value string
-}
-
-func railPaneWidth(frameWidth int) int {
-	if frameWidth >= 104 {
-		return 34
-	}
-	return 30
-}
-
-func railView(glyphs glyphSet, title string, subtitle []string, rows []railRow, width int) string {
-	lines := []string{sectionLabelStyle.Render(strings.ToUpper(title))}
-	lines = append(lines, subtitle...)
-	lines = append(lines, ruleStyle.Render(strings.Repeat(glyphs.Rule, max(4, width))))
-	for _, row := range rows {
-		if row.Label == "" {
-			lines = append(lines, row.Value)
-			continue
-		}
-		lines = append(lines, mutedStyle.Render(fixedDisplayWidth(row.Label, railLabelColumn))+" "+row.Value)
-	}
-	return strings.Join(lines, "\n")
-}
-
-// rail renders the column that is never focused. It exists so the boundary
-// being assembled stays readable while the user is deciding the next piece.
-func (m model) rail(title string, subtitle []string, rows []railRow) string {
-	width := m.railWidth()
-	if !m.twoPane() {
-		width = m.frameWidth()
-	}
-	lines := []string{sectionLabelStyle.Render(strings.ToUpper(title))}
-	for _, line := range subtitle {
-		lines = append(lines, line)
-	}
-	lines = append(lines, ruleStyle.Render(strings.Repeat(m.theme.glyphs.Rule, max(4, width))))
-	for _, row := range rows {
-		if row.Label == "" {
-			lines = append(lines, row.Value)
-			continue
-		}
-		lines = append(lines, mutedStyle.Render(fixedDisplayWidth(row.Label, railLabelColumn))+" "+row.Value)
-	}
-	return strings.Join(lines, "\n")
-}
-
-// contextRail is the fleet-level rail: where Launchpad is pointed and what the
-// host can currently do.
-func (m model) contextRail() string {
-	glyphs := m.theme.glyphs
-	softnet := mutedStyle.Render("checking" + m.theme.ellipsis())
-	if m.softnetStatusKnown {
-		softnet = successStyle.Render(glyphs.Check + " ready")
-		if !m.softnetIsReady {
-			softnet = warningStyle.Render(glyphs.Warn + " needs setup")
-		}
-	}
-	rows := []railRow{
-		{Label: "folder", Value: mutedStyle.Render(truncate(m.currentPathLine(), max(12, m.railWidth()-railLabelColumn-1)))},
-		{Label: "softnet", Value: softnet},
-		{Label: "clipboard", Value: mutedStyle.Render("off on every run")},
-		{Label: "audio", Value: mutedStyle.Render("off on every run")},
-	}
-	if len(m.cfg.PendingCleanup) > 0 {
-		rows = append(rows, railRow{Label: "cleanup", Value: warningStyle.Render(countLabel(len(m.cfg.PendingCleanup), "VM", "VMs") + " pending")})
-	}
-	return m.rail("host", nil, rows)
-}
-
-
-func orDash(value string) string {
-	if value == "" {
-		return "—"
-	}
-	return value
-}
-
 func folderAccessChoices() []accessChoice {
 	return []accessChoice{
 		{
@@ -306,15 +226,15 @@ func folderAccessChoices() []accessChoice {
 			Style:       noFolderBadgeStyle,
 		},
 		{
-			Label:       string(FolderReadHere),
-			Short:       "current folder, read-only",
-			Description: "current directory read-only",
+			Label:       string(FolderReadFolder),
+			Short:       "project folder, read-only",
+			Description: "selected project folder read-only",
 			Style:       readHereBadgeStyle,
 		},
 		{
-			Label:       string(FolderEditHere),
-			Short:       "current folder, read-write",
-			Description: "current directory read-write",
+			Label:       string(FolderEditFolder),
+			Short:       "project folder, read-write",
+			Description: "selected project folder read-write",
 			Style:       editHereBadgeStyle,
 		},
 	}

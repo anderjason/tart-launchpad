@@ -14,17 +14,23 @@ func BuildRunPlan(cfg Config, options RunOptions) (Plan, error) {
 	if options.VMName == "" {
 		return Plan{}, fmt.Errorf("%w: --vm is required", ErrUsage)
 	}
-	if options.CWD == "" {
-		return Plan{}, fmt.Errorf("%w: cwd is required", ErrUsage)
-	}
 	if err := ValidateCanonicalTerms(options.FolderAccess, options.NetworkAccess); err != nil {
 		return Plan{}, err
+	}
+	if options.FolderAccess != FolderNoFolder && strings.TrimSpace(options.ProjectPath) == "" {
+		return Plan{}, fmt.Errorf("%w: project folder is required for %s", ErrUsage, options.FolderAccess)
+	}
+	projectPath := options.ProjectPath
+	if options.FolderAccess == FolderNoFolder {
+		projectPath = ""
 	}
 
 	hostAccess := HostAccessGrant{
 		FolderAccess: options.FolderAccess,
-		ProjectPath:  options.CWD,
+		ProjectPath:  projectPath,
 		VolumePaths:  append([]string(nil), options.VolumePaths...),
+		Clipboard:    options.Clipboard,
+		GuestAudio:   options.GuestAudio,
 	}
 	annotatedArgs, err := runArgsAnnotated(cfg, options.VMName, hostAccess, options.NetworkAccess, options.TemplateReadOnly)
 	if err != nil {
@@ -36,8 +42,12 @@ func BuildRunPlan(cfg Config, options RunOptions) (Plan, error) {
 		Prerequisites: PlanPrerequisites{Softnet: networkUsesSoftnet(options.NetworkAccess)},
 		Review: runPlanReview(PlanReview{
 			FolderAccess:  hostAccess.FolderAccess,
+			ProjectPath:   hostAccess.ProjectPath,
 			NetworkAccess: options.NetworkAccess,
 			VolumePaths:   hostAccess.VolumePaths,
+			VolumeIDs:     cloneStringMap(options.VolumeIDs),
+			Clipboard:     hostAccess.Clipboard,
+			GuestAudio:    hostAccess.GuestAudio,
 		}),
 		Steps: []CommandStep{configureStep(options.VMName), {
 			Kind:          CommandStepRun,
@@ -61,9 +71,12 @@ func BuildNewFromTemplatePlan(cfg Config, options NewFromTemplateOptions) (Plan,
 	runPlan, err := BuildRunPlan(cfg, RunOptions{
 		VMName:        options.NewName,
 		FolderAccess:  options.FolderAccess,
+		ProjectPath:   options.ProjectPath,
 		NetworkAccess: options.NetworkAccess,
-		CWD:           options.CWD,
+		Clipboard:     options.Clipboard,
+		GuestAudio:    options.GuestAudio,
 		VolumePaths:   options.VolumePaths,
+		VolumeIDs:     options.VolumeIDs,
 	})
 	if err != nil {
 		return Plan{}, err
@@ -81,6 +94,7 @@ func BuildNewFromTemplatePlan(cfg Config, options NewFromTemplateOptions) (Plan,
 		Review:        runPlan.Review,
 		Prerequisites: runPlan.Prerequisites,
 		Steps:         steps,
+		CreatedVM:     options.NewName,
 	}
 	if options.RunDuration == RunDurationTemporaryRun {
 		plan.TemporaryVM = options.NewName
@@ -191,14 +205,23 @@ func BuildImportPlan(options ImportOptions) (Plan, error) {
 	}, nil
 }
 
-
 func runPlanReview(review PlanReview) PlanReview {
 	review.Verb = "run"
 	review.ShowBoundaries = true
-	review.Clipboard = "off"
-	review.Audio = "off"
 	review.VolumePaths = append([]string(nil), review.VolumePaths...)
+	review.VolumeIDs = cloneStringMap(review.VolumeIDs)
 	return review
+}
+
+func cloneStringMap(source map[string]string) map[string]string {
+	if len(source) == 0 {
+		return nil
+	}
+	clone := make(map[string]string, len(source))
+	for key, value := range source {
+		clone[key] = value
+	}
+	return clone
 }
 
 func (p Plan) ReviewVerb() string {
@@ -236,8 +259,12 @@ func runArgsAnnotated(cfg Config, vmName string, hostAccess HostAccessGrant, net
 	args := []AnnotatedArg{
 		{Value: "tart"},
 		{Value: "run"},
-		{Value: "--no-clipboard", Provenance: "clipboard off"},
-		{Value: "--no-audio", Provenance: "audio off"},
+	}
+	if !hostAccess.Clipboard {
+		args = append(args, AnnotatedArg{Value: "--no-clipboard", Provenance: "clipboard off"})
+	}
+	if !hostAccess.GuestAudio {
+		args = append(args, AnnotatedArg{Value: "--no-audio", Provenance: "guest audio off"})
 	}
 
 	folderArgs, err := hostAccess.FolderTartDirArgs()
@@ -248,7 +275,14 @@ func runArgsAnnotated(cfg Config, vmName string, hostAccess HostAccessGrant, net
 		args = append(args, AnnotatedArg{Value: arg, Provenance: string(hostAccess.FolderAccess)})
 	}
 
-	lanCIDRs := strings.Join(cfg.Network.LANCIDRs, ",")
+	lanCIDRs := ""
+	if network == NetworkLAN || network == NetworkLANAndInternet {
+		configuredLANCIDRs, err := normalizePrivateIPv4CIDRs(cfg.Network.LANCIDRs)
+		if err != nil {
+			return nil, err
+		}
+		lanCIDRs = strings.Join(configuredLANCIDRs, ",")
+	}
 	switch network {
 	case NetworkOffline:
 		args = append(args, AnnotatedArg{Value: "--net-softnet-block=0.0.0.0/0", Provenance: string(NetworkOffline)})

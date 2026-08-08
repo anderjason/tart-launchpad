@@ -17,6 +17,12 @@ type VolumeLister interface {
 
 type RealVolumeLister struct{}
 
+type volumeDiscovery struct {
+	readDir func(string) ([]os.DirEntry, error)
+	stat    func(string) (os.FileInfo, error)
+	info    func(...string) ([]byte, error)
+}
+
 type diskutilVolumeInfoPayload struct {
 	DeviceIdentifier string   `json:"DeviceIdentifier"`
 	MountPoint       string   `json:"MountPoint"`
@@ -28,29 +34,37 @@ type diskutilVolumeInfoPayload struct {
 }
 
 func (RealVolumeLister) ListHostVolumes() ([]HostVolume, error) {
-	entries, err := os.ReadDir("/Volumes")
+	return listHostVolumes("/Volumes", volumeDiscovery{
+		readDir: os.ReadDir,
+		stat:    os.Stat,
+		info:    diskutilPlistJSON,
+	})
+}
+
+func listHostVolumes(root string, discovery volumeDiscovery) ([]HostVolume, error) {
+	entries, err := discovery.readDir(root)
 	if err != nil {
 		return nil, fmt.Errorf("list mounted volumes: %w", err)
 	}
 
 	volumes := make([]HostVolume, 0, len(entries))
 	for _, entry := range entries {
-		path := filepath.Join("/Volumes", entry.Name())
-		info, err := os.Stat(path)
+		path := filepath.Join(root, entry.Name())
+		info, err := discovery.stat(path)
 		if err != nil {
-			return nil, fmt.Errorf("inspect mounted volume %s: %w", path, err)
+			return nil, fmt.Errorf("inspect mounted volume %q: %w", path, err)
 		}
 		if !info.IsDir() {
 			continue
 		}
 
-		infoJSON, err := diskutilPlistJSON("info", "-plist", path)
+		infoJSON, err := discovery.info("info", "-plist", path)
 		if err != nil {
-			return nil, fmt.Errorf("inspect mounted volume %s: %w", path, err)
+			return nil, fmt.Errorf("read mounted volume metadata %q: %w", path, err)
 		}
 		volume, ok, err := hostVolumeFromInfoJSON(infoJSON)
 		if err != nil {
-			return nil, fmt.Errorf("parse mounted volume %s: %w", path, err)
+			return nil, fmt.Errorf("parse mounted volume metadata %q: %w", path, err)
 		}
 		if ok {
 			volumes = append(volumes, volume)

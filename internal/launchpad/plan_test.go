@@ -9,9 +9,9 @@ func TestBuildRunPlanReadHereInternet(t *testing.T) {
 	cfg := DefaultConfig()
 	plan, err := BuildRunPlan(cfg, RunOptions{
 		VMName:        "dev",
-		FolderAccess:  FolderReadHere,
+		FolderAccess:  FolderReadFolder,
 		NetworkAccess: NetworkInternet,
-		CWD:           "/tmp/project",
+		ProjectPath:   "/tmp/project",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -27,7 +27,7 @@ func TestBuildRunPlanReadHereInternet(t *testing.T) {
 	if !plan.Prerequisites.Softnet {
 		t.Fatal("Softnet prerequisite = false, want true")
 	}
-	if !plan.Review.ShowBoundaries || plan.Review.FolderAccess != FolderReadHere || plan.Review.NetworkAccess != NetworkInternet {
+	if !plan.Review.ShowBoundaries || plan.Review.FolderAccess != FolderReadFolder || plan.Review.NetworkAccess != NetworkInternet {
 		t.Fatalf("review = %#v, want run boundary review", plan.Review)
 	}
 }
@@ -36,9 +36,9 @@ func TestBuildRunPlanEditHereHost(t *testing.T) {
 	cfg := DefaultConfig()
 	plan, err := BuildRunPlan(cfg, RunOptions{
 		VMName:        "dev",
-		FolderAccess:  FolderEditHere,
+		FolderAccess:  FolderEditFolder,
 		NetworkAccess: NetworkHost,
-		CWD:           "/tmp/project",
+		ProjectPath:   "/tmp/project",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -52,13 +52,45 @@ func TestBuildRunPlanEditHereHost(t *testing.T) {
 	}
 }
 
+func TestBuildRunPlanEnablesClipboardAndGuestAudioByOmittingDisableFlags(t *testing.T) {
+	plan, err := BuildRunPlan(DefaultConfig(), RunOptions{
+		VMName:        "dev",
+		FolderAccess:  FolderReadFolder,
+		ProjectPath:   "/tmp/project",
+		NetworkAccess: NetworkHost,
+		Clipboard:     true,
+		GuestAudio:    true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRun := []string{"tart", "run", "--dir=project:/tmp/project:ro", "--net-host", "dev"}
+	if !reflect.DeepEqual(plan.Steps[1].Args, wantRun) {
+		t.Fatalf("run args\n got %#v\nwant %#v", plan.Steps[1].Args, wantRun)
+	}
+	if !plan.Review.Clipboard || !plan.Review.GuestAudio || plan.Review.ProjectPath != "/tmp/project" {
+		t.Fatalf("review = %#v, want enabled host connections and explicit project path", plan.Review)
+	}
+}
+
+func TestBuildRunPlanRequiresProjectPathForFolderGrant(t *testing.T) {
+	_, err := BuildRunPlan(DefaultConfig(), RunOptions{
+		VMName:        "dev",
+		FolderAccess:  FolderReadFolder,
+		NetworkAccess: NetworkHost,
+	})
+	if err == nil {
+		t.Fatal("expected missing project-folder error")
+	}
+}
+
 func TestBuildRunPlanLANRequiresCIDR(t *testing.T) {
 	cfg := DefaultConfig()
 	_, err := BuildRunPlan(cfg, RunOptions{
 		VMName:        "dev",
 		FolderAccess:  FolderNoFolder,
 		NetworkAccess: NetworkLAN,
-		CWD:           "/tmp/project",
+		ProjectPath:   "/tmp/project",
 	})
 	if err == nil {
 		t.Fatal("expected error")
@@ -72,7 +104,7 @@ func TestBuildRunPlanLANAndInternet(t *testing.T) {
 		VMName:        "dev",
 		FolderAccess:  FolderNoFolder,
 		NetworkAccess: NetworkLANAndInternet,
-		CWD:           "/tmp/project",
+		ProjectPath:   "/tmp/project",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -83,13 +115,39 @@ func TestBuildRunPlanLANAndInternet(t *testing.T) {
 	}
 }
 
+func TestBuildRunPlanRejectsNonPrivateConfiguredLANCIDR(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Network.LANCIDRs = []string{"0.0.0.0/0"}
+	_, err := BuildRunPlan(cfg, RunOptions{
+		VMName:        "dev",
+		FolderAccess:  FolderNoFolder,
+		NetworkAccess: NetworkLAN,
+	})
+	if err == nil {
+		t.Fatal("internet-wide LAN CIDR succeeded; want rejection")
+	}
+}
+
+func TestBuildRunPlanIgnoresUnusedInvalidLANCIDR(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Network.LANCIDRs = []string{"0.0.0.0/0"}
+	_, err := BuildRunPlan(cfg, RunOptions{
+		VMName:        "dev",
+		FolderAccess:  FolderNoFolder,
+		NetworkAccess: NetworkOffline,
+	})
+	if err != nil {
+		t.Fatalf("offline plan failed because of unused LAN config: %v", err)
+	}
+}
+
 func TestBuildRunPlanConfiguresResourcesBeforeRun(t *testing.T) {
 	cfg := DefaultConfig()
 	plan, err := BuildRunPlan(cfg, RunOptions{
 		VMName:        "dev",
 		FolderAccess:  FolderNoFolder,
 		NetworkAccess: NetworkOffline,
-		CWD:           "/tmp/project",
+		ProjectPath:   "/tmp/project",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -109,7 +167,7 @@ func TestBuildRunPlanAddsSelectedVolumesReadWrite(t *testing.T) {
 		VMName:        "dev",
 		FolderAccess:  FolderNoFolder,
 		NetworkAccess: NetworkOffline,
-		CWD:           "/tmp/project",
+		ProjectPath:   "/tmp/project",
 		VolumePaths:   []string{"/Volumes/External SSD", "/Volumes/Backup"},
 	})
 	if err != nil {
@@ -127,7 +185,7 @@ func TestBuildRunPlanAddsSelectedVolumesReadWrite(t *testing.T) {
 
 func TestHostAccessGrantBuildsFolderAndVolumeArgs(t *testing.T) {
 	grant := HostAccessGrant{
-		FolderAccess: FolderReadHere,
+		FolderAccess: FolderReadFolder,
 		ProjectPath:  "/tmp/project",
 		VolumePaths:  []string{"/Volumes/External SSD"},
 	}
@@ -148,7 +206,7 @@ func TestBuildRunPlanRejectsBlankVolumePath(t *testing.T) {
 		VMName:        "dev",
 		FolderAccess:  FolderNoFolder,
 		NetworkAccess: NetworkOffline,
-		CWD:           "/tmp/project",
+		ProjectPath:   "/tmp/project",
 		VolumePaths:   []string{""},
 	})
 	if err == nil {
@@ -332,13 +390,16 @@ func TestBuildTemporaryRunPlan(t *testing.T) {
 		RunDuration:   RunDurationTemporaryRun,
 		FolderAccess:  FolderNoFolder,
 		NetworkAccess: NetworkOffline,
-		CWD:           "/tmp/project",
+		ProjectPath:   "/tmp/project",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !plan.HasTemporaryVM || plan.TemporaryVM != "tmp-1" {
 		t.Fatalf("temporary metadata not set: %#v", plan)
+	}
+	if plan.CreatedVM != "tmp-1" {
+		t.Fatalf("created VM = %q, want tmp-1", plan.CreatedVM)
 	}
 	if len(plan.Steps) != 4 {
 		t.Fatalf("expected clone/configure/run/delete, got %d steps", len(plan.Steps))

@@ -13,9 +13,9 @@ const (
 type FolderAccess string
 
 const (
-	FolderNoFolder FolderAccess = "no-folder"
-	FolderReadHere FolderAccess = "read-here"
-	FolderEditHere FolderAccess = "edit-here"
+	FolderNoFolder   FolderAccess = "no-folder"
+	FolderReadFolder FolderAccess = "read-folder"
+	FolderEditFolder FolderAccess = "edit-folder"
 )
 
 type NetworkAccess string
@@ -35,7 +35,7 @@ const (
 	RunDurationTemporaryRun RunDuration = "temporary-run"
 )
 
-var FolderAccesses = []FolderAccess{FolderNoFolder, FolderReadHere, FolderEditHere}
+var FolderAccesses = []FolderAccess{FolderNoFolder, FolderReadFolder, FolderEditFolder}
 var NetworkAccesses = []NetworkAccess{NetworkOffline, NetworkInternet, NetworkHost, NetworkLAN, NetworkLANAndInternet}
 var RunDurations = []RunDuration{RunDurationTemporaryRun, RunDurationWorkspace}
 
@@ -84,6 +84,7 @@ type Plan struct {
 	Steps          []CommandStep
 	Review         PlanReview
 	Prerequisites  PlanPrerequisites
+	CreatedVM      string
 	TemporaryVM    string
 	HasTemporaryVM bool
 	RenameFrom     string
@@ -103,25 +104,32 @@ type PlanReview struct {
 	Verb           string
 	ShowBoundaries bool
 	FolderAccess   FolderAccess
+	ProjectPath    string
 	NetworkAccess  NetworkAccess
 	VolumePaths    []string
-	Clipboard      string
-	Audio          string
+	VolumeIDs      map[string]string
+	Clipboard      bool
+	GuestAudio     bool
 }
 
 type HostAccessGrant struct {
 	FolderAccess FolderAccess
 	ProjectPath  string
 	VolumePaths  []string
+	Clipboard    bool
+	GuestAudio   bool
 }
 
 type RunOptions struct {
 	VMName           string
 	FolderAccess     FolderAccess
+	ProjectPath      string
 	NetworkAccess    NetworkAccess
-	CWD              string
+	Clipboard        bool
+	GuestAudio       bool
 	TemplateReadOnly bool
 	VolumePaths      []string
+	VolumeIDs        map[string]string
 }
 
 type NewFromTemplateOptions struct {
@@ -129,9 +137,12 @@ type NewFromTemplateOptions struct {
 	NewName       string
 	RunDuration   RunDuration
 	FolderAccess  FolderAccess
+	ProjectPath   string
 	NetworkAccess NetworkAccess
-	CWD           string
+	Clipboard     bool
+	GuestAudio    bool
 	VolumePaths   []string
+	VolumeIDs     map[string]string
 }
 
 type ExportOptions struct {
@@ -158,7 +169,7 @@ func (k VMKind) Valid() bool {
 
 func (f FolderAccess) Valid() bool {
 	switch f {
-	case FolderNoFolder, FolderReadHere, FolderEditHere:
+	case FolderNoFolder, FolderReadFolder, FolderEditFolder:
 		return true
 	default:
 		return false

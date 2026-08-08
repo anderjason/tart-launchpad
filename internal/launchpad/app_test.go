@@ -16,7 +16,7 @@ func TestFolderChoiceAdvancesToNetwork(t *testing.T) {
 	m.selectedVM = m.vms[0]
 	m.flow = flowRunExisting
 	m.screen = screenFolder
-	m.cursor = indexFolder(FolderReadHere)
+	m.cursor = indexFolder(FolderReadFolder)
 
 	updated, _ := m.handleKey("enter")
 	got := updated.(model)
@@ -24,14 +24,51 @@ func TestFolderChoiceAdvancesToNetwork(t *testing.T) {
 	if got.screen != screenNetwork {
 		t.Fatalf("screen = %v, want %v", got.screen, screenNetwork)
 	}
-	if got.folderAccess != FolderReadHere {
-		t.Fatalf("folderAccess = %q, want %q", got.folderAccess, FolderReadHere)
+	if got.folderAccess != FolderReadFolder {
+		t.Fatalf("folderAccess = %q, want %q", got.folderAccess, FolderReadFolder)
+	}
+}
+
+func TestHostConnectionsToggleClipboardAndGuestAudio(t *testing.T) {
+	m := workspaceRunFixture().model()
+	m.selectedVM = m.vms[0]
+	m.flow = flowRunExisting
+	m.screen = screenFolder
+
+	updated, _ := m.handleKey("c")
+	m = updated.(model)
+	updated, _ = m.handleKey("a")
+	m = updated.(model)
+
+	if !m.clipboard || !m.guestAudio {
+		t.Fatalf("connections = clipboard %t, guest audio %t; want both on", m.clipboard, m.guestAudio)
+	}
+}
+
+func TestHostConnectionsCanChooseAnotherProjectFolder(t *testing.T) {
+	m := workspaceRunFixture().model()
+	m.selectedVM = m.vms[0]
+	m.flow = flowRunExisting
+	m.screen = screenFolder
+
+	updated, _ := m.handleKey("p")
+	m = updated.(model)
+	if m.screen != screenProjectFolderPath {
+		t.Fatalf("screen = %v, want project-folder path", m.screen)
+	}
+	m.projectPathInput = "/tmp/other-project"
+	m.projectPathCursor = runeCount(m.projectPathInput)
+	updated, _ = m.handleKey("enter")
+	m = updated.(model)
+
+	if m.screen != screenFolder || m.projectPath != "/tmp/other-project" {
+		t.Fatalf("screen = %v, path = %q; want host connections with explicit path", m.screen, m.projectPath)
 	}
 }
 
 func TestNewModelUsesLeastAccessScreenDefaults(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Defaults.FolderAccess = FolderReadHere
+	cfg.Defaults.FolderAccess = FolderReadFolder
 	cfg.Defaults.NetworkAccess = NetworkInternet
 
 	m := newModel(cfg, "", nil)
@@ -67,6 +104,66 @@ func TestVMLoadedMessageMergesConfiguredKinds(t *testing.T) {
 	}
 }
 
+func TestVMLoadedMessageClearsCleanupForAbsentVM(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.PendingCleanup = []string{"tmp-gone"}
+	m := newModel(cfg, "", nil)
+
+	updated, _ := m.Update(vmsLoadedMsg([]VM{{Name: "dev"}}))
+	got := updated.(model)
+
+	if len(got.cfg.PendingCleanup) != 0 {
+		t.Fatalf("pending cleanup = %#v, want empty", got.cfg.PendingCleanup)
+	}
+	if !got.needsSave {
+		t.Fatal("needsSave = false, want reconciled cleanup persisted")
+	}
+}
+
+func TestCleanupShortcutDoesNotDeleteVMWithReusedName(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.PendingCleanup = []string{"tmp-reused"}
+	m := newModel(cfg, "", []VM{{Name: "tmp-reused", Kind: VMKindWorkspace}})
+
+	updated, cmd := m.handleKey("c")
+	got := updated.(model)
+
+	if cmd != nil {
+		t.Fatal("cleanup shortcut returned a command")
+	}
+	if got.plan.DeleteVM != "" || got.screen != screenHome {
+		t.Fatalf("cleanup shortcut prepared deletion of %q on screen %v", got.plan.DeleteVM, got.screen)
+	}
+	if !strings.Contains(got.status, "identity is ambiguous") {
+		t.Fatalf("status = %q, want identity warning", got.status)
+	}
+}
+
+func TestLoadVMsCommandUsesConfigSnapshot(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.SetKind("base", VMKindTemplate)
+	m := newModel(cfg, "", nil)
+	m.tart = &fakeTart{listVMs: []VM{{Name: "base"}}}
+
+	cmd := m.loadVMsCmd()
+	m.cfg.SetKind("base", VMKindWorkspace)
+	msg := cmd().(vmsLoadedMsg)
+
+	if msg[0].Kind != VMKindTemplate {
+		t.Fatalf("loaded kind = %q, want snapshot kind %q", msg[0].Kind, VMKindTemplate)
+	}
+}
+
+func TestHomePollContinuesWhileOffHome(t *testing.T) {
+	m := newModel(DefaultConfig(), "", nil)
+	m.tart = &fakeTart{}
+	m.screen = screenVMAction
+
+	if m.homePollCmd() == nil {
+		t.Fatal("home poll command is nil off the home screen")
+	}
+}
+
 func TestNetworkChoiceAdvancesToReview(t *testing.T) {
 	m := newModel(DefaultConfig(), "", []VM{{
 		Name:  "dev",
@@ -76,7 +173,7 @@ func TestNetworkChoiceAdvancesToReview(t *testing.T) {
 	m.selectedVM = m.vms[0]
 	m.flow = flowRunExisting
 	m.screen = screenNetwork
-	m.folderAccess = FolderReadHere
+	m.folderAccess = FolderReadFolder
 	m.cursor = indexNetwork(NetworkInternet)
 
 	updated, _ := m.handleKey("enter")
@@ -161,6 +258,53 @@ func TestVolumeScreenToggleAndContinueAddsSelectedVolumeToPlan(t *testing.T) {
 	}
 	if slices.Contains(runArgs, "--dir=volume-external-ssd:/Volumes/External SSD") {
 		t.Fatalf("run args = %#v, did not want unselected volume", runArgs)
+	}
+	if got.plan.Review.VolumeIDs["/Volumes/Backup"] != "disk8s1" {
+		t.Fatalf("reviewed volume IDs = %#v, want Backup device identity", got.plan.Review.VolumeIDs)
+	}
+}
+
+func TestExecutionRejectsVolumeChangedAfterReview(t *testing.T) {
+	m := volumeSelectionFixture().model()
+	m.tart = &fakeTart{}
+	m.volumeLister = fakeVolumeLister{volumes: []HostVolume{{
+		ID:   "disk9s1",
+		Path: "/Volumes/Backup",
+		Name: "Replacement",
+	}}}
+	m.plan = Plan{
+		Review: PlanReview{
+			VolumePaths: []string{"/Volumes/Backup"},
+			VolumeIDs:   map[string]string{"/Volumes/Backup": "disk8s1"},
+		},
+		Steps: []CommandStep{{
+			Kind:  CommandStepRun,
+			Label: "run",
+			Args:  []string{"tart", "run", "dev", "--dir=volume-backup:/Volumes/Backup"},
+		}},
+	}
+
+	msg := m.executeCurrentStepCmd()().(executeStepFinishedMsg)
+
+	if msg.err == nil || !strings.Contains(msg.err.Error(), "changed after review") {
+		t.Fatalf("error = %v, want changed-volume rejection", msg.err)
+	}
+}
+
+func TestRenderFrameShowsTrailStepAndDangerContext(t *testing.T) {
+	m := newModel(DefaultConfig(), "", nil)
+	view := m.renderFrame(framePage{
+		Trail:  []string{"VMs", "dev", "delete"},
+		Step:   "review",
+		Body:   "Delete dev?",
+		Danger: true,
+	})
+
+	if !strings.Contains(view, "VMs / dev / delete") {
+		t.Fatalf("frame does not show trail:\n%s", view)
+	}
+	if !strings.Contains(view, "review") {
+		t.Fatalf("frame does not show step:\n%s", view)
 	}
 }
 
@@ -682,6 +826,53 @@ func TestExecutionRecordsPendingCleanupAfterTemporaryRunFailure(t *testing.T) {
 	}
 }
 
+func TestExecutionRecordsPendingCleanupWhenCloneSucceeds(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	m := newModel(DefaultConfig(), cfgPath, nil)
+	m.plan = temporaryExecutionPlan()
+	m.tart = &fakeTart{}
+
+	updated, cmd := m.beginExecution()
+	got := updated.(model)
+	updated, _ = got.Update(cmd())
+	got = updated.(model)
+
+	if len(got.cfg.PendingCleanup) != 1 || got.cfg.PendingCleanup[0] != "tmp-1" {
+		t.Fatalf("pending cleanup = %#v, want tmp-1", got.cfg.PendingCleanup)
+	}
+	saved := mustLoadConfigFile(t, cfgPath)
+	if len(saved.PendingCleanup) != 1 || saved.PendingCleanup[0] != "tmp-1" {
+		t.Fatalf("saved pending cleanup = %#v, want tmp-1", saved.PendingCleanup)
+	}
+}
+
+func TestCompletedWorkspaceFromTemplateRecordsCreatedVM(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	m := templateRunFixture().model()
+	m.cfgPath = cfgPath
+	m.selectedVM = m.vms[0]
+	m.selectedTemplate = m.vms[0]
+	m.flow = flowNewFromTemplate
+	m.runDuration = RunDurationWorkspace
+	m.nameInput = "newws"
+	if err := m.preparePlan(); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.applyCompletedPlanEffects(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := m.cfg.LastRunFor("newws"); !ok {
+		t.Fatal("created workspace has no last-run settings")
+	}
+	if _, ok := m.cfg.LastRunFor("base"); ok {
+		t.Fatal("template unexpectedly received the workspace last-run settings")
+	}
+	if got := m.executionReturnName(); got != "newws" {
+		t.Fatalf("return name = %q, want newws", got)
+	}
+}
+
 func TestExecutionClearsTemporaryCleanupAfterSuccess(t *testing.T) {
 	cfgPath := filepath.Join(t.TempDir(), "config.json")
 	m := newModel(DefaultConfig(), cfgPath, nil)
@@ -762,6 +953,59 @@ func TestNewFromTemplateReviewCancelReturnsToTemplate(t *testing.T) {
 	}
 }
 
+func TestReturnHomeTargetsRenderedVMOrder(t *testing.T) {
+	m := newModel(DefaultConfig(), "", []VM{
+		{Name: "base", Kind: VMKindTemplate},
+		{Name: "ws-a", Kind: VMKindWorkspace},
+		{Name: "ws-b", Kind: VMKindWorkspace},
+	})
+
+	m = m.returnHomeToVM("ws-b")
+	items := m.filteredHomeItems()
+
+	if got := items[m.cursor].vm.Name; got != "ws-b" {
+		t.Fatalf("selected VM = %q, want ws-b", got)
+	}
+}
+
+func TestReturnHomeTargetsFilteredVMOrder(t *testing.T) {
+	m := newModel(DefaultConfig(), "", []VM{
+		{Name: "base", Kind: VMKindTemplate},
+		{Name: "dev-a", Kind: VMKindWorkspace},
+		{Name: "dev-b", Kind: VMKindWorkspace},
+	})
+	m.homeFilter = "dev-b"
+
+	m = m.returnHomeToVM("dev-b")
+	items := m.filteredHomeItems()
+
+	if got := items[m.cursor].vm.Name; got != "dev-b" {
+		t.Fatalf("selected VM = %q, want dev-b", got)
+	}
+}
+
+func TestReturnHomeTargetsCreatedVMAfterRefresh(t *testing.T) {
+	m := newModel(DefaultConfig(), "", []VM{{Name: "base", Kind: VMKindTemplate}})
+	m = m.returnHomeToVM("newws")
+	if m.homeFocusVM != "newws" {
+		t.Fatalf("pending focus = %q, want newws", m.homeFocusVM)
+	}
+
+	updated, _ := m.Update(vmsLoadedMsg([]VM{
+		{Name: "base", Kind: VMKindTemplate},
+		{Name: "newws", Kind: VMKindWorkspace},
+	}))
+	m = updated.(model)
+	items := m.filteredHomeItems()
+
+	if got := items[m.cursor].vm.Name; got != "newws" {
+		t.Fatalf("selected VM = %q, want newws", got)
+	}
+	if m.homeFocusVM != "" {
+		t.Fatalf("pending focus = %q, want cleared", m.homeFocusVM)
+	}
+}
+
 func TestRenderHomeWithStaleCursorStillShowsSelection(t *testing.T) {
 	m := newModel(DefaultConfig(), "", []VM{{
 		Name:  "one",
@@ -780,10 +1024,10 @@ func TestRenderHomeWithStaleCursorStillShowsSelection(t *testing.T) {
 func TestReviewGroupsFolderAndVolumesAsHostAccessGrant(t *testing.T) {
 	m := newModel(DefaultConfig(), "", nil)
 	m.plan = Plan{Review: PlanReview{
-		FolderAccess:  FolderReadHere,
+		FolderAccess:  FolderReadFolder,
 		NetworkAccess: NetworkOffline,
-		Clipboard:     "off",
-		Audio:         "off",
+		Clipboard:     false,
+		GuestAudio:    false,
 	}}
 
 	view := m.renderCompletedGrantLedger()
@@ -834,6 +1078,80 @@ func TestVMActionRunAdvancesToFolder(t *testing.T) {
 	}
 }
 
+func TestVMActionRunStartsWithNoSelectedVolumes(t *testing.T) {
+	m := volumeSelectionFixture().model()
+	m.selectedVM = m.vms[0]
+	m.screen = screenVMAction
+	m.selectedVolumePath["/Volumes/External SSD"] = true
+
+	updated, _ := m.handleKey("enter")
+	got := updated.(model)
+
+	if len(got.selectedVolumePaths()) != 0 {
+		t.Fatalf("selected volumes = %#v, want none", got.selectedVolumePaths())
+	}
+}
+
+func TestRepeatTemplateRunIsReadOnly(t *testing.T) {
+	fixture := templateRunFixture()
+	fixture.cfg.SetLastRun("base", LastRunConfig{FolderAccess: FolderNoFolder, NetworkAccess: NetworkOffline})
+	m := fixture.model()
+
+	updated, _ := m.handleKey(".")
+	got := updated.(model)
+
+	if got.screen != screenReview {
+		t.Fatalf("screen = %v, want %v", got.screen, screenReview)
+	}
+	if got.flow != flowRunTemplateReadOnly {
+		t.Fatalf("flow = %v, want %v", got.flow, flowRunTemplateReadOnly)
+	}
+	if !slices.Contains(got.plan.Steps[1].Args, "--root-disk-opts=ro") {
+		t.Fatalf("run args = %#v, want read-only root disk", got.plan.Steps[1].Args)
+	}
+}
+
+func TestRepeatRunRestoresExactHostConnections(t *testing.T) {
+	fixture := workspaceRunFixture()
+	fixture.cfg.SetLastRun("dev", LastRunConfig{
+		FolderAccess:  FolderEditFolder,
+		ProjectPath:   "/tmp/other-project",
+		NetworkAccess: NetworkHost,
+		Clipboard:     true,
+		GuestAudio:    true,
+	})
+	m := fixture.model()
+
+	updated, _ := m.handleKey(".")
+	got := updated.(model)
+
+	if got.screen != screenReview {
+		t.Fatalf("screen = %v, want review", got.screen)
+	}
+	if got.plan.Review.ProjectPath != "/tmp/other-project" || !got.plan.Review.Clipboard || !got.plan.Review.GuestAudio {
+		t.Fatalf("review = %#v, want exact replayed host connections", got.plan.Review)
+	}
+	if slices.Contains(got.plan.Steps[1].Args, "--no-clipboard") || slices.Contains(got.plan.Steps[1].Args, "--no-audio") {
+		t.Fatalf("run args = %#v, want clipboard and guest audio enabled", got.plan.Steps[1].Args)
+	}
+}
+
+func TestNewShortcutUsesSelectedTemplate(t *testing.T) {
+	m := newModel(DefaultConfig(), "", []VM{
+		{Name: "base-a", Kind: VMKindTemplate},
+		{Name: "dev", Kind: VMKindWorkspace},
+		{Name: "base-b", Kind: VMKindTemplate},
+	})
+	m.cursor = 2
+
+	updated, _ := m.handleKey("n")
+	got := updated.(model)
+
+	if got.selectedTemplate.Name != "base-b" {
+		t.Fatalf("selected template = %q, want base-b", got.selectedTemplate.Name)
+	}
+}
+
 func TestLANChoiceWithoutCIDROpensCIDRPrompt(t *testing.T) {
 	m := newModel(DefaultConfig(), "", []VM{{
 		Name:  "dev",
@@ -843,7 +1161,7 @@ func TestLANChoiceWithoutCIDROpensCIDRPrompt(t *testing.T) {
 	m.selectedVM = m.vms[0]
 	m.flow = flowRunExisting
 	m.screen = screenNetwork
-	m.folderAccess = FolderReadHere
+	m.folderAccess = FolderReadFolder
 	m.cursor = indexNetwork(NetworkLAN)
 
 	updated, _ := m.handleKey("enter")
@@ -872,7 +1190,7 @@ func TestLANCIDRChoiceSavesAndAdvancesToReview(t *testing.T) {
 	m.selectedVM = m.vms[0]
 	m.flow = flowRunExisting
 	m.screen = screenLANCIDR
-	m.folderAccess = FolderReadHere
+	m.folderAccess = FolderReadFolder
 	m.networkAccess = NetworkLAN
 	m.lanCIDRChoices = []lanCIDRChoice{{
 		Label:       "192.168.1.0/24",
@@ -920,7 +1238,7 @@ func TestLANCIDRTextPromptSavesAndAdvancesToReview(t *testing.T) {
 	m.selectedVM = m.vms[0]
 	m.flow = flowRunExisting
 	m.screen = screenLANCIDRText
-	m.folderAccess = FolderReadHere
+	m.folderAccess = FolderReadFolder
 	m.networkAccess = NetworkLAN
 	m.lanInput = "192.168.1.0/24"
 
@@ -963,9 +1281,9 @@ func TestCursorCellsHaveStableWidth(t *testing.T) {
 }
 
 func TestAccessChoicesUseCanonicalGrantLabels(t *testing.T) {
-	folder := folderAccessChoice(FolderEditHere)
-	if folder.Label != string(FolderEditHere) {
-		t.Fatalf("edit-here label = %q", folder.Label)
+	folder := folderAccessChoice(FolderEditFolder)
+	if folder.Label != string(FolderEditFolder) {
+		t.Fatalf("edit-folder label = %q", folder.Label)
 	}
 
 	cfg := DefaultConfig()
@@ -1046,6 +1364,31 @@ func TestReviewWindowShowsMoreMarkers(t *testing.T) {
 	}
 	if !strings.Contains(window[len(window)-1], "more") {
 		t.Fatalf("last window line = %q, want more marker", window[len(window)-1])
+	}
+}
+
+func TestReviewScrollStopsAtEnd(t *testing.T) {
+	m := newModel(DefaultConfig(), "", nil)
+	m.height = 11
+	m.screen = screenReview
+	m.plan = Plan{Steps: []CommandStep{
+		{Label: "one", Args: []string{"tart", "run", "one"}},
+		{Label: "two", Args: []string{"tart", "run", "two"}},
+		{Label: "three", Args: []string{"tart", "run", "three"}},
+	}}
+
+	for range 100 {
+		updated, _ := m.handleReviewKey("j")
+		m = updated.(model)
+	}
+	maxScroll := m.reviewMaxScroll()
+	if m.reviewScroll != maxScroll {
+		t.Fatalf("review scroll = %d, want max %d", m.reviewScroll, maxScroll)
+	}
+	updated, _ := m.handleReviewKey("k")
+	m = updated.(model)
+	if maxScroll > 0 && m.reviewScroll != maxScroll-1 {
+		t.Fatalf("review scroll after k = %d, want %d", m.reviewScroll, maxScroll-1)
 	}
 }
 

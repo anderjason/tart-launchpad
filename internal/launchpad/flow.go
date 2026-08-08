@@ -18,22 +18,29 @@ const (
 )
 
 type LaunchpadIntent struct {
-	Kind             LaunchpadIntentKind
-	VM               VM
-	Template         VM
+	Kind                  LaunchpadIntentKind
+	VM                    VM
+	Template              VM
 	NameInput             string
 	ImportSourcePath      string
 	ExportDestinationPath string
-	RunDuration      RunDuration
-	FolderAccess     FolderAccess
-	NetworkAccess    NetworkAccess
-	VolumePaths      []string
-	ExistingVMs      []VM
+	RunDuration           RunDuration
+	FolderAccess          FolderAccess
+	ProjectPath           string
+	NetworkAccess         NetworkAccess
+	Clipboard             bool
+	GuestAudio            bool
+	VolumePaths           []string
+	VolumeIDs             map[string]string
+	ExistingVMs           []VM
 }
 
 func (i LaunchpadIntent) BuildPlan(cfg Config, host HostEnvironment) (Plan, error) {
 	switch i.Kind {
 	case IntentRunExisting:
+		if i.VM.Kind == VMKindTemplate {
+			return Plan{}, fmt.Errorf("%w: %s is a template; run it read-only or create a workspace", ErrUsage, i.VM.Name)
+		}
 		return i.buildRunPlan(cfg, host, i.VM.Name, false)
 	case IntentRunTemplateReadOnly:
 		return i.buildRunPlan(cfg, host, i.VM.Name, true)
@@ -53,22 +60,25 @@ func (i LaunchpadIntent) BuildPlan(cfg Config, host HostEnvironment) (Plan, erro
 }
 
 func (i LaunchpadIntent) buildRunPlan(cfg Config, host HostEnvironment, vmName string, templateReadOnly bool) (Plan, error) {
-	cwd, err := host.CurrentDirectory()
+	projectPath, err := i.resolvedProjectPath(host)
 	if err != nil {
 		return Plan{}, err
 	}
 	return BuildRunPlan(cfg, RunOptions{
 		VMName:           vmName,
 		FolderAccess:     i.FolderAccess,
+		ProjectPath:      projectPath,
 		NetworkAccess:    i.NetworkAccess,
-		CWD:              cwd,
+		Clipboard:        i.Clipboard,
+		GuestAudio:       i.GuestAudio,
 		TemplateReadOnly: templateReadOnly,
 		VolumePaths:      i.VolumePaths,
+		VolumeIDs:        i.VolumeIDs,
 	})
 }
 
 func (i LaunchpadIntent) buildNewFromTemplatePlan(cfg Config, host HostEnvironment) (Plan, error) {
-	cwd, err := host.CurrentDirectory()
+	projectPath, err := i.resolvedProjectPath(host)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -81,10 +91,28 @@ func (i LaunchpadIntent) buildNewFromTemplatePlan(cfg Config, host HostEnvironme
 		NewName:       strings.TrimSpace(i.NameInput),
 		RunDuration:   i.RunDuration,
 		FolderAccess:  i.FolderAccess,
+		ProjectPath:   projectPath,
 		NetworkAccess: i.NetworkAccess,
-		CWD:           cwd,
+		Clipboard:     i.Clipboard,
+		GuestAudio:    i.GuestAudio,
 		VolumePaths:   i.VolumePaths,
+		VolumeIDs:     i.VolumeIDs,
 	})
+}
+
+func (i LaunchpadIntent) resolvedProjectPath(host HostEnvironment) (string, error) {
+	if i.FolderAccess == FolderNoFolder {
+		return "", nil
+	}
+	path := strings.TrimSpace(i.ProjectPath)
+	if path == "" {
+		var err error
+		path, err = host.CurrentDirectory()
+		if err != nil {
+			return "", err
+		}
+	}
+	return host.ResolveProjectDirectory(path)
 }
 
 func (i LaunchpadIntent) buildExportPlan(host HostEnvironment) (Plan, error) {
