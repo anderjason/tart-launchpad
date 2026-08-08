@@ -20,10 +20,6 @@ _Avoid_: base image
 A VM kind for a VM that is kept around and run directly for ongoing work.
 _Avoid_: project VM
 
-**Unmarked VM**:
-A VM kind for a local Tart VM that Launchpad has not categorized.
-_Avoid_: unknown VM
-
 **Host access grant**:
 The combined project-folder, mounted-volume, clipboard, and guest-audio connections given to a Launchpad-shaped run.
 _Avoid_: mount policy, storage profile

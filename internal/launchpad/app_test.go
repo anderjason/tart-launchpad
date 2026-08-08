@@ -1,6 +1,7 @@
 package launchpad
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -522,7 +523,7 @@ func TestHomeKeyClampsStaleCursor(t *testing.T) {
 		State: "stopped",
 	}, {
 		Name:  "two",
-		Kind:  VMKindUnmarked,
+		Kind:  VMKindWorkspace,
 		State: "stopped",
 	}})
 	m.cursor = 5
@@ -834,15 +835,145 @@ func TestExecutionRecordsPendingCleanupWhenCloneSucceeds(t *testing.T) {
 
 	updated, cmd := m.beginExecution()
 	got := updated.(model)
-	updated, _ = got.Update(cmd())
-	got = updated.(model)
 
 	if len(got.cfg.PendingCleanup) != 1 || got.cfg.PendingCleanup[0] != "tmp-1" {
-		t.Fatalf("pending cleanup = %#v, want tmp-1", got.cfg.PendingCleanup)
+		t.Fatalf("pending cleanup before clone = %#v, want tmp-1", got.cfg.PendingCleanup)
 	}
 	saved := mustLoadConfigFile(t, cfgPath)
 	if len(saved.PendingCleanup) != 1 || saved.PendingCleanup[0] != "tmp-1" {
-		t.Fatalf("saved pending cleanup = %#v, want tmp-1", saved.PendingCleanup)
+		t.Fatalf("saved pending cleanup before clone = %#v, want tmp-1", saved.PendingCleanup)
+	}
+	if cmd == nil {
+		t.Fatal("clone command is nil")
+	}
+}
+
+func TestExecutionKeepsPendingCleanupWhenCloneFails(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	m := newModel(DefaultConfig(), cfgPath, nil)
+	m.plan = temporaryExecutionPlan()
+	m.tart = &fakeTart{failAtLabel: "clone"}
+
+	updated, cmd := m.beginExecution()
+	got := updated.(model)
+	updated, _ = got.Update(cmd())
+	got = updated.(model)
+
+	if got.executeErr == "" {
+		t.Fatal("clone failure was not reported")
+	}
+	if len(got.cfg.PendingCleanup) != 1 || got.cfg.PendingCleanup[0] != "tmp-1" {
+		t.Fatalf("pending cleanup after clone failure = %#v, want tmp-1", got.cfg.PendingCleanup)
+	}
+}
+
+func TestExecutionDoesNotCloneWhenPendingCleanupCannotBeSaved(t *testing.T) {
+	m := newModel(DefaultConfig(), t.TempDir(), nil)
+	m.plan = temporaryExecutionPlan()
+	tart := &fakeTart{}
+	m.tart = tart
+
+	updated, cmd := m.beginExecution()
+	got := updated.(model)
+
+	if cmd != nil {
+		t.Fatal("clone command was returned after pending cleanup save failed")
+	}
+	if !got.executeDone || !strings.Contains(got.executeErr, "save pending cleanup before clone") {
+		t.Fatalf("execution state = done %v, error %q", got.executeDone, got.executeErr)
+	}
+	if len(tart.calls) != 0 {
+		t.Fatalf("Tart calls = %#v, want none", tart.calls)
+	}
+}
+
+func TestCtrlCDoesNotQuitDuringExecution(t *testing.T) {
+	m := newModel(DefaultConfig(), filepath.Join(t.TempDir(), "config.json"), nil)
+	m.plan = temporaryExecutionPlan()
+	m.tart = &fakeTart{}
+	updated, _ := m.beginExecution()
+	m = updated.(model)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	got := updated.(model)
+	if cmd != nil {
+		t.Fatal("ctrl+c returned a quit command during active execution")
+	}
+	if got.screen != screenExecute || got.executeDone {
+		t.Fatalf("execution state changed after ctrl+c: screen=%v done=%v", got.screen, got.executeDone)
+	}
+}
+
+func TestExportDoesNotReplaceDestinationCreatedAfterReview(t *testing.T) {
+	directory := t.TempDir()
+	destination := filepath.Join(directory, "dev.tvm")
+	plan, err := BuildExportPlan(ExportOptions{
+		VMName:          "dev",
+		VMKind:          VMKindWorkspace,
+		DestinationPath: destination,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := newModel(DefaultConfig(), filepath.Join(directory, "config.json"), nil)
+	m.plan = plan
+	m.tart = &fakeTart{exportContents: []byte("new archive")}
+
+	updated, cmd := m.beginExecution()
+	got := updated.(model)
+	if err := os.WriteFile(destination, []byte("keep me"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	updated, _ = got.Update(cmd())
+	got = updated.(model)
+
+	contents, err := os.ReadFile(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "keep me" {
+		t.Fatalf("destination contents = %q, want original contents", contents)
+	}
+	if got.executeErr == "" || !strings.Contains(got.executeErr, "already exists") {
+		t.Fatalf("execution error = %q, want destination collision", got.executeErr)
+	}
+	if _, err := os.Stat(plan.ExportTemporaryPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("temporary export remains after collision: %v", err)
+	}
+}
+
+func TestExportInstallsCompletedArchiveWithoutLeavingTemporaryFile(t *testing.T) {
+	directory := t.TempDir()
+	destination := filepath.Join(directory, "dev.tvm")
+	plan, err := BuildExportPlan(ExportOptions{
+		VMName:          "dev",
+		VMKind:          VMKindWorkspace,
+		DestinationPath: destination,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := newModel(DefaultConfig(), filepath.Join(directory, "config.json"), nil)
+	m.plan = plan
+	m.tart = &fakeTart{exportContents: []byte("archive")}
+
+	updated, cmd := m.beginExecution()
+	got := updated.(model)
+	updated, _ = got.Update(cmd())
+	got = updated.(model)
+
+	contents, err := os.ReadFile(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "archive" {
+		t.Fatalf("destination contents = %q, want archive", contents)
+	}
+	if got.executeErr != "" {
+		t.Fatalf("execution error = %q", got.executeErr)
+	}
+	if _, err := os.Stat(plan.ExportTemporaryPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("temporary export remains after success: %v", err)
 	}
 }
 
@@ -870,6 +1001,49 @@ func TestCompletedWorkspaceFromTemplateRecordsCreatedVM(t *testing.T) {
 	}
 	if got := m.executionReturnName(); got != "newws" {
 		t.Fatalf("return name = %q, want newws", got)
+	}
+}
+
+func TestCompletedRenameMovesSavedVMState(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.SetKind("old", VMKindTemplate)
+	m := newModel(cfg, filepath.Join(t.TempDir(), "config.json"), nil)
+	plan, err := BuildRenamePlan("old", "new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.plan = plan
+
+	if err := m.applyCompletedPlanEffects(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.cfg.VMs["old"]; ok {
+		t.Fatal("old VM state remains after rename")
+	}
+	if got := m.cfg.KindFor("new"); got != VMKindTemplate {
+		t.Fatalf("new VM kind = %q, want template", got)
+	}
+}
+
+func TestCompletedDeleteForgetsSavedVMState(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.SetKind("dev", VMKindTemplate)
+	cfg.AddPendingCleanup("dev")
+	m := newModel(cfg, filepath.Join(t.TempDir(), "config.json"), nil)
+	plan, err := BuildDeletePlan("dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.plan = plan
+
+	if err := m.applyCompletedPlanEffects(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.cfg.VMs["dev"]; ok {
+		t.Fatal("deleted VM state remains")
+	}
+	if len(m.cfg.PendingCleanup) != 0 {
+		t.Fatalf("pending cleanup = %#v, want empty", m.cfg.PendingCleanup)
 	}
 }
 
@@ -1052,8 +1226,8 @@ func TestMarkKindShowsEachKindExplanationOnce(t *testing.T) {
 	if got := strings.Count(view, "kept clean; source for new VMs"); got != 1 {
 		t.Fatalf("template explanation appears %d times, want once:\n%s", got, view)
 	}
-	if strings.Contains(view, "unmarked") {
-		t.Fatalf("mark kind view exposes the internal unmarked state:\n%s", view)
+	if got := strings.Count(view, "kept around; run directly"); got != 1 {
+		t.Fatalf("workspace explanation appears %d times, want once:\n%s", got, view)
 	}
 }
 
@@ -1314,7 +1488,7 @@ func TestHomeGroupsTemplatesAfterMainVMs(t *testing.T) {
 		State: "stopped",
 	}, {
 		Name:  "old",
-		Kind:  VMKindUnmarked,
+		Kind:  VMKindWorkspace,
 		State: "stopped",
 	}})
 

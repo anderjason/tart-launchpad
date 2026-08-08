@@ -162,15 +162,20 @@ func BuildExportPlan(options ExportOptions) (Plan, error) {
 	if options.DestinationExists {
 		return Plan{}, fmt.Errorf("%w: export destination already exists: %s", ErrUsage, destinationPath)
 	}
+	temporaryPath, err := newExportTemporaryPath(destinationPath)
+	if err != nil {
+		return Plan{}, err
+	}
 	return Plan{
-		Title:      fmt.Sprintf("Export %s", vmName),
-		Review:     PlanReview{Verb: "export"},
-		ExportPath: destinationPath,
-		Warnings:   []string{VMArchiveSensitiveStateWarning},
+		Title:               fmt.Sprintf("Export %s", vmName),
+		Review:              PlanReview{Verb: "export"},
+		ExportPath:          destinationPath,
+		ExportTemporaryPath: temporaryPath,
+		Warnings:            []string{VMArchiveSensitiveStateWarning},
 		Steps: []CommandStep{{
 			Kind:  CommandStepExport,
 			Label: "export",
-			Args:  []string{"tart", "export", vmName, destinationPath},
+			Args:  []string{"tart", "export", vmName, temporaryPath},
 		}},
 	}, nil
 }

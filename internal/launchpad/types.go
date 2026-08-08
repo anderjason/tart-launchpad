@@ -7,7 +7,6 @@ type VMKind string
 const (
 	VMKindTemplate  VMKind = "template"
 	VMKindWorkspace VMKind = "workspace"
-	VMKindUnmarked  VMKind = "unmarked"
 )
 
 type FolderAccess string
@@ -80,20 +79,21 @@ const (
 )
 
 type Plan struct {
-	Title          string
-	Steps          []CommandStep
-	Review         PlanReview
-	Prerequisites  PlanPrerequisites
-	CreatedVM      string
-	TemporaryVM    string
-	HasTemporaryVM bool
-	RenameFrom     string
-	RenameTo       string
-	DeleteVM       string
-	ExportPath     string
-	ImportPath     string
-	ImportVMName   string
-	Warnings       []string
+	Title               string
+	Steps               []CommandStep
+	Review              PlanReview
+	Prerequisites       PlanPrerequisites
+	CreatedVM           string
+	TemporaryVM         string
+	HasTemporaryVM      bool
+	RenameFrom          string
+	RenameTo            string
+	DeleteVM            string
+	ExportPath          string
+	ExportTemporaryPath string
+	ImportPath          string
+	ImportVMName        string
+	Warnings            []string
 }
 
 type PlanPrerequisites struct {
@@ -160,7 +160,7 @@ type ImportOptions struct {
 
 func (k VMKind) Valid() bool {
 	switch k {
-	case VMKindTemplate, VMKindWorkspace, VMKindUnmarked:
+	case VMKindTemplate, VMKindWorkspace:
 		return true
 	default:
 		return false

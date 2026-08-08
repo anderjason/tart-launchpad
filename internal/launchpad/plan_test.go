@@ -1,6 +1,7 @@
 package launchpad
 
 import (
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -266,9 +267,17 @@ func TestBuildExportPlanForTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"tart", "export", "base", destination}
-	if !reflect.DeepEqual(plan.Steps[0].Args, want) {
-		t.Fatalf("args\n got %#v\nwant %#v", plan.Steps[0].Args, want)
+	if got := plan.Steps[0].Args[:3]; !reflect.DeepEqual(got, []string{"tart", "export", "base"}) {
+		t.Fatalf("command prefix = %#v", got)
+	}
+	if plan.ExportTemporaryPath == "" || plan.Steps[0].Args[3] != plan.ExportTemporaryPath {
+		t.Fatalf("temporary export path is not the reviewed command target: %#v", plan)
+	}
+	if filepath.Dir(plan.ExportTemporaryPath) != filepath.Dir(destination) {
+		t.Fatalf("temporary export directory = %q, want %q", filepath.Dir(plan.ExportTemporaryPath), filepath.Dir(destination))
+	}
+	if plan.ExportTemporaryPath == destination {
+		t.Fatal("export command targets the final destination directly")
 	}
 	if plan.Steps[0].Kind != CommandStepExport {
 		t.Fatalf("step kind = %q, want %q", plan.Steps[0].Kind, CommandStepExport)
@@ -291,9 +300,8 @@ func TestBuildExportPlanForWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"tart", "export", "dev", destination}
-	if !reflect.DeepEqual(plan.Steps[0].Args, want) {
-		t.Fatalf("args\n got %#v\nwant %#v", plan.Steps[0].Args, want)
+	if got := plan.Steps[0].Args[3]; got == destination {
+		t.Fatal("export command targets the final destination directly")
 	}
 }
 
@@ -309,10 +317,10 @@ func TestBuildExportPlanRejectsExistingDestination(t *testing.T) {
 	}
 }
 
-func TestBuildExportPlanRejectsUnmarkedVM(t *testing.T) {
+func TestBuildExportPlanRejectsInvalidVMKind(t *testing.T) {
 	_, err := BuildExportPlan(ExportOptions{
 		VMName:          "dev",
-		VMKind:          VMKindUnmarked,
+		VMKind:          VMKind("invalid"),
 		DestinationPath: "/tmp/dev.tvm",
 	})
 	if err == nil {

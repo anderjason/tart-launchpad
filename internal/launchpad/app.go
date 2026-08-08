@@ -26,6 +26,9 @@ type App struct {
 
 func NewApp(cfg Config, cfgPath string, tart Tart) (*App, error) {
 	cfg.Normalize()
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("validate config: %w", err)
+	}
 	return &App{cfg: cfg, cfgPath: cfgPath, tart: tart, host: RealHostEnvironment{}, volumeLister: RealVolumeLister{}}, nil
 }
 
@@ -161,46 +164,46 @@ type model struct {
 	backStack    []navigationEntry
 	returnScreen screen
 
-	selectedVM            VM
-	selectedTemplate      VM
-	runDuration           RunDuration
-	nameMode              nameMode
-	nameInput             string
-	nameCursor            int
-	lanInput              string
-	lanCursor             int
-	lanCIDRChoices        []lanCIDRChoice
-	folderAccess          FolderAccess
-	projectPath           string
-	projectPathInput      string
-	projectPathCursor     int
-	networkAccess         NetworkAccess
-	clipboard             bool
-	guestAudio            bool
-	hostVolumes           []HostVolume
-	host                  HostEnvironment
-	tart                  Tart
-	volumeLister          VolumeLister
-	selectedVolumePath    map[string]bool
-	importSourcePath      string
-	importPathCursor      int
-	exportDestinationPath string
-	exportPathCursor      int
-	plan                  Plan
-	reviewScroll          int
-	deleteConfirmInput    string
-	executeIndex          int
-	executeStates         []executeStepState
-	executeOutput         string
-	executeErr            string
-	executeDone           bool
-	executeSummary        string
-	temporaryVMExists     bool
-	executeStartedAt      time.Time
-	executeFinishedAt     time.Time
-	stepStartedAt         []time.Time
-	stepFinishedAt        []time.Time
-	missingRunVolumes     []string
+	selectedVM                 VM
+	selectedTemplate           VM
+	runDuration                RunDuration
+	nameMode                   nameMode
+	nameInput                  string
+	nameCursor                 int
+	lanInput                   string
+	lanCursor                  int
+	lanCIDRChoices             []lanCIDRChoice
+	folderAccess               FolderAccess
+	projectPath                string
+	projectPathInput           string
+	projectPathCursor          int
+	networkAccess              NetworkAccess
+	clipboard                  bool
+	guestAudio                 bool
+	hostVolumes                []HostVolume
+	host                       HostEnvironment
+	tart                       Tart
+	volumeLister               VolumeLister
+	selectedVolumePath         map[string]bool
+	importSourcePath           string
+	importPathCursor           int
+	exportDestinationPath      string
+	exportPathCursor           int
+	plan                       Plan
+	reviewScroll               int
+	deleteConfirmInput         string
+	executeIndex               int
+	executeStates              []executeStepState
+	executeOutput              string
+	executeErr                 string
+	executeDone                bool
+	executeSummary             string
+	temporaryVMCreationStarted bool
+	executeStartedAt           time.Time
+	executeFinishedAt          time.Time
+	stepStartedAt              []time.Time
+	stepFinishedAt             []time.Time
+	missingRunVolumes          []string
 }
 
 func newModel(cfg Config, cfgPath string, vms []VM) model {
@@ -353,10 +356,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.status != "" && msg.String() != "c" {
 			m.status = ""
 		}
-		// ctrl+c always quits. Plain q only quits from the fleet list in normal
-		// mode, so it stays typeable inside any prompt or filter.
+		// A non-interactive step cannot be interrupted safely after it has
+		// started. Interactive Tart runs own the terminal and receive ctrl+c
+		// directly through ExecProcess.
 		switch msg.String() {
 		case "ctrl+c":
+			if m.screen == screenExecute && !m.executeDone {
+				m.status = "wait for the current step to finish before quitting"
+				return m, nil
+			}
 			return m, tea.Quit
 		case "q":
 			if m.screen == screenHome && m.mode == modeNormal && !m.keysOverlay {
@@ -1079,9 +1087,19 @@ func (m model) beginExecution() (tea.Model, tea.Cmd) {
 	m.executeErr = ""
 	m.executeDone = len(m.plan.Steps) == 0
 	m.executeSummary = ""
-	m.temporaryVMExists = false
+	m.temporaryVMCreationStarted = false
 	m.screen = screenExecute
 	m.mode = modeNormal
+	if len(m.plan.Steps) > 0 {
+		if err := m.prepareStepExecution(m.plan.Steps[0]); err != nil {
+			m.executeStates[0] = executeStepFailed
+			m.markSkippedAfter(0)
+			m.executeErr = fmt.Errorf("%s: %w", m.plan.Steps[0].Label, err).Error()
+			m.executeDone = true
+			m.executeFinishedAt = time.Now()
+			return m, nil
+		}
+	}
 	cmd := m.executeCurrentStepCmd()
 	if interactive {
 		cmd = tea.Batch(cmd, m.executeSecondCmd())
@@ -1172,6 +1190,11 @@ func (m model) handleExecuteStepFinished(msg executeStepFinishedMsg) (tea.Model,
 		m.executeStates[msg.index] = executeStepFailed
 		m.markSkippedAfter(msg.index)
 		err := fmt.Errorf("%s: %w", step.Label, msg.err)
+		if step.Kind == CommandStepExport {
+			if cleanupErr := discardExportTemporary(m.plan.ExportTemporaryPath); cleanupErr != nil {
+				err = errors.Join(err, cleanupErr)
+			}
+		}
 		if cleanupErr := m.recordPendingCleanupAfterFailure(); cleanupErr != nil {
 			err = errors.Join(err, cleanupErr)
 		}
@@ -1204,29 +1227,52 @@ func (m model) handleExecuteStepFinished(msg executeStepFinishedMsg) (tea.Model,
 	if m.executeIndex < len(m.stepStartedAt) {
 		m.stepStartedAt[m.executeIndex] = time.Now()
 	}
+	if err := m.prepareStepExecution(m.plan.Steps[m.executeIndex]); err != nil {
+		m.executeStates[m.executeIndex] = executeStepFailed
+		m.markSkippedAfter(m.executeIndex)
+		m.executeErr = fmt.Errorf("%s: %w", m.plan.Steps[m.executeIndex].Label, err).Error()
+		m.executeDone = true
+		m.executeFinishedAt = time.Now()
+		return m, nil
+	}
 	return m, m.executeCurrentStepCmd()
 }
 
-func (m *model) applySuccessfulStepEffects(step CommandStep) error {
+func (m *model) prepareStepExecution(step CommandStep) error {
 	if m.plan.HasTemporaryVM && step.Kind == CommandStepClone {
-		m.temporaryVMExists = true
 		m.cfg.AddPendingCleanup(m.plan.TemporaryVM)
 		if err := SaveConfig(m.cfgPath, m.cfg); err != nil {
-			return fmt.Errorf("save pending cleanup: %w", err)
+			m.cfg.RemovePendingCleanup(m.plan.TemporaryVM)
+			return fmt.Errorf("save pending cleanup before clone: %w", err)
+		}
+		m.temporaryVMCreationStarted = true
+	}
+	if step.Kind == CommandStepExport {
+		if err := reserveExportTemporary(m.plan.ExportTemporaryPath, m.plan.ExportPath); err != nil {
+			return err
 		}
 	}
+	return nil
+}
+
+func (m *model) applySuccessfulStepEffects(step CommandStep) error {
 	if m.plan.HasTemporaryVM && step.Kind == CommandStepDeleteTemporaryVM {
 		m.cfg.RemovePendingCleanup(m.plan.TemporaryVM)
-		m.temporaryVMExists = false
+		m.temporaryVMCreationStarted = false
 		if err := SaveConfig(m.cfgPath, m.cfg); err != nil {
 			return fmt.Errorf("save completed temporary cleanup: %w", err)
+		}
+	}
+	if step.Kind == CommandStepExport {
+		if err := installExportTemporary(m.plan.ExportTemporaryPath, m.plan.ExportPath); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
 func (m *model) recordPendingCleanupAfterFailure() error {
-	if !m.plan.HasTemporaryVM || !m.temporaryVMExists {
+	if !m.plan.HasTemporaryVM || !m.temporaryVMCreationStarted {
 		return nil
 	}
 	m.cfg.AddPendingCleanup(m.plan.TemporaryVM)
@@ -1874,7 +1920,7 @@ func (m model) renderExecute() string {
 		lines = append(lines, "", successStyle.Render(glyphs.Done+" Done"))
 	}
 
-	hintSet := []string{"ctrl+c quit"}
+	hintSet := []string{"wait for current step"}
 	if m.executeDone {
 		hintSet = []string{"enter back to VMs"}
 	}
@@ -2401,7 +2447,7 @@ func vmActionRows(vm VM) []actionRow {
 		{Label: "export", Description: "save an archive (may contain secrets)"},
 		{Label: "rename", Description: "change the local VM name"},
 		{Label: "delete", Description: "remove this VM permanently", Danger: true},
-		{Label: "mark kind", Description: "set template/workspace/unmarked"},
+		{Label: "mark kind", Description: "set template/workspace"},
 	}
 }
 
@@ -2413,7 +2459,7 @@ func templateActionRows() []actionRow {
 		{Label: "export", Description: "save an archive (may contain secrets)"},
 		{Label: "rename", Description: "change the local VM name"},
 		{Label: "delete", Description: "remove this VM permanently", Danger: true},
-		{Label: "mark kind", Description: "set template/workspace/unmarked"},
+		{Label: "mark kind", Description: "set template/workspace"},
 	}
 }
 

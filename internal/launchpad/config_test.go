@@ -3,6 +3,7 @@ package launchpad
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -27,17 +28,67 @@ func TestNormalizeUsesLeastAccessFallbacks(t *testing.T) {
 	}
 }
 
-func TestNormalizeDropsFolderReplayWithoutExplicitPath(t *testing.T) {
+func TestSaveConfigRejectsFolderReplayWithoutExplicitPath(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.VMs["dev"] = VMConfig{LastRun: &LastRunConfig{
+	cfg.VMs["dev"] = VMConfig{Kind: VMKindWorkspace, LastRun: &LastRunConfig{
 		FolderAccess:  FolderReadFolder,
 		NetworkAccess: NetworkOffline,
 	}}
 
-	cfg.Normalize()
+	if err := SaveConfig(filepath.Join(t.TempDir(), "config.json"), cfg); err == nil {
+		t.Fatal("save succeeded with a folder replay that has no project path")
+	}
+}
 
-	if _, ok := cfg.LastRunFor("dev"); ok {
-		t.Fatal("last run without an explicit project path was retained")
+func TestLoadConfigRejectsExistingEmptyFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TART_LAUNCHPAD_CONFIG", path)
+
+	if _, _, err := LoadConfig(); err == nil {
+		t.Fatal("empty existing config was accepted")
+	}
+}
+
+func TestLoadConfigRejectsInvalidVMKind(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	data := []byte(`{"vms":{"base":{"kind":"typo"}},"defaults":{"folder_access":"no-folder","network_access":"offline"}}`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TART_LAUNCHPAD_CONFIG", path)
+
+	if _, _, err := LoadConfig(); err == nil {
+		t.Fatal("config with an invalid VM kind was accepted")
+	}
+}
+
+func TestLoadConfigMigratesPreviouslyPersistedUncategorizedKind(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	data := []byte(`{"vms":{"dev":{"kind":"unmarked"}},"defaults":{"folder_access":"no-folder","network_access":"offline"}}`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TART_LAUNCHPAD_CONFIG", path)
+
+	cfg, _, err := LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.KindFor("dev"); got != VMKindWorkspace {
+		t.Fatalf("migrated kind = %q, want workspace", got)
+	}
+	if err := SaveConfig(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(saved), "unmarked") {
+		t.Fatalf("legacy kind remained after save: %s", saved)
 	}
 }
 

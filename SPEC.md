@@ -12,7 +12,6 @@ VM kinds:
 
 - `template`: kept clean; source for new VMs
 - `workspace`: kept around; run directly for ongoing work
-- `unmarked`: existing Tart VM not categorized yet
 
 Folder access:
 
@@ -49,7 +48,7 @@ Run duration:
 ## Required Behavior
 
 - Every run shows the exact `tart` command before execution.
-- Workspaces and unmarked VMs can be run after choosing host connections and network access.
+- Workspaces can be run after choosing host connections and network access.
 - Folder grants store an explicit resolved project-folder path separately from the access mode.
 - Clipboard and guest audio choices are shown with their consequences during review.
 - If mounted non-system volumes are connected, the TUI shows a volume checklist after network access and before review.

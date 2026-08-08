@@ -2,7 +2,6 @@ package launchpad
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -73,51 +72,4 @@ func MergeKinds(cfg Config, vms []VM) []VM {
 		vms[i].Kind = cfg.KindFor(vms[i].Name)
 	}
 	return vms
-}
-
-func ExecutePlan(stdout io.Writer, stderr io.Writer, tart Tart, cfg Config, cfgPath string, plan Plan) error {
-	if err := checkPlanPrerequisites(plan); err != nil {
-		return err
-	}
-	temporaryVMExists := false
-	for _, step := range plan.Steps {
-		fmt.Fprintf(stderr, "%s\n", ShellQuote(step.Args))
-		if err := tart.RunStep(stdout, stderr, step); err != nil {
-			commandErr := fmt.Errorf("%s: %w", step.Label, err)
-			if plan.HasTemporaryVM && temporaryVMExists {
-				cfg.AddPendingCleanup(plan.TemporaryVM)
-				if saveErr := SaveConfig(cfgPath, cfg); saveErr != nil {
-					return errors.Join(commandErr, fmt.Errorf("save pending cleanup: %w", saveErr))
-				}
-			}
-			return commandErr
-		}
-		if plan.HasTemporaryVM && step.Kind == CommandStepClone {
-			temporaryVMExists = true
-			cfg.AddPendingCleanup(plan.TemporaryVM)
-			if err := SaveConfig(cfgPath, cfg); err != nil {
-				return fmt.Errorf("save pending cleanup: %w", err)
-			}
-		}
-		if plan.HasTemporaryVM && step.Kind == CommandStepDeleteTemporaryVM {
-			cfg.RemovePendingCleanup(plan.TemporaryVM)
-			temporaryVMExists = false
-			if err := SaveConfig(cfgPath, cfg); err != nil {
-				return fmt.Errorf("save completed temporary cleanup: %w", err)
-			}
-		}
-	}
-	if plan.RenameFrom != "" && plan.RenameTo != "" {
-		cfg.RenameVMKind(plan.RenameFrom, plan.RenameTo)
-		if err := SaveConfig(cfgPath, cfg); err != nil {
-			return fmt.Errorf("save renamed VM kind: %w", err)
-		}
-	}
-	if plan.DeleteVM != "" {
-		cfg.ForgetVM(plan.DeleteVM)
-		if err := SaveConfig(cfgPath, cfg); err != nil {
-			return fmt.Errorf("save deleted VM state: %w", err)
-		}
-	}
-	return nil
 }
