@@ -7,15 +7,14 @@ type VMKind string
 const (
 	VMKindTemplate  VMKind = "template"
 	VMKindWorkspace VMKind = "workspace"
-	VMKindUnmarked  VMKind = "unmarked"
 )
 
 type FolderAccess string
 
 const (
-	FolderNoFolder FolderAccess = "no-folder"
-	FolderReadHere FolderAccess = "read-here"
-	FolderEditHere FolderAccess = "edit-here"
+	FolderNoFolder   FolderAccess = "no-folder"
+	FolderReadFolder FolderAccess = "read-folder"
+	FolderEditFolder FolderAccess = "edit-folder"
 )
 
 type NetworkAccess string
@@ -35,7 +34,7 @@ const (
 	RunDurationTemporaryRun RunDuration = "temporary-run"
 )
 
-var FolderAccesses = []FolderAccess{FolderNoFolder, FolderReadHere, FolderEditHere}
+var FolderAccesses = []FolderAccess{FolderNoFolder, FolderReadFolder, FolderEditFolder}
 var NetworkAccesses = []NetworkAccess{NetworkOffline, NetworkInternet, NetworkHost, NetworkLAN, NetworkLANAndInternet}
 var RunDurations = []RunDuration{RunDurationTemporaryRun, RunDurationWorkspace}
 
@@ -47,81 +46,60 @@ type VM struct {
 	Kind    VMKind
 }
 
-type HostVolume struct {
-	ID   string
-	Path string
-	Name string
-	Size uint64
-}
-
 type CommandStep struct {
-	Kind          CommandStepKind
-	Label         string
-	Args          []string
-	AnnotatedArgs []AnnotatedArg
-}
-
-type AnnotatedArg struct {
-	Value      string
-	Provenance string
+	Kind  CommandStepKind
+	Label string
+	Args  []string
 }
 
 type CommandStepKind string
 
 const (
 	CommandStepRun               CommandStepKind = "run"
-	CommandStepConfigure         CommandStepKind = "configure"
 	CommandStepClone             CommandStepKind = "clone"
 	CommandStepRename            CommandStepKind = "rename"
 	CommandStepDelete            CommandStepKind = "delete"
 	CommandStepDeleteTemporaryVM CommandStepKind = "delete-temporary-vm"
-	CommandStepExport            CommandStepKind = "export"
-	CommandStepImport            CommandStepKind = "import"
 )
 
 type Plan struct {
 	Title          string
 	Steps          []CommandStep
 	Review         PlanReview
-	Prerequisites  PlanPrerequisites
+	CreatedVM      string
 	TemporaryVM    string
 	HasTemporaryVM bool
 	RenameFrom     string
 	RenameTo       string
 	DeleteVM       string
-	ExportPath     string
-	ImportPath     string
-	ImportVMName   string
-	Warnings       []string
-}
-
-type PlanPrerequisites struct {
-	Softnet bool
 }
 
 type PlanReview struct {
-	Verb           string
-	ShowBoundaries bool
-	FolderAccess   FolderAccess
-	NetworkAccess  NetworkAccess
-	VolumePaths    []string
-	Clipboard      string
-	Audio          string
+	Verb                 string
+	ShowBoundaries       bool
+	FolderAccess         FolderAccess
+	ProjectPath          string
+	NetworkAccess        NetworkAccess
+	Clipboard            bool
+	GuestAudio           bool
+	TemplateDiskReadOnly bool
 }
 
 type HostAccessGrant struct {
 	FolderAccess FolderAccess
 	ProjectPath  string
-	VolumePaths  []string
+	Clipboard    bool
+	GuestAudio   bool
 }
 
 type RunOptions struct {
 	VMName           string
 	FolderAccess     FolderAccess
+	ProjectPath      string
 	NetworkAccess    NetworkAccess
-	CWD              string
+	Clipboard        bool
+	GuestAudio       bool
 	TemplateReadOnly bool
-	VolumePaths      []string
 }
 
 type NewFromTemplateOptions struct {
@@ -129,27 +107,15 @@ type NewFromTemplateOptions struct {
 	NewName       string
 	RunDuration   RunDuration
 	FolderAccess  FolderAccess
+	ProjectPath   string
 	NetworkAccess NetworkAccess
-	CWD           string
-	VolumePaths   []string
-}
-
-type ExportOptions struct {
-	VMName            string
-	VMKind            VMKind
-	DestinationPath   string
-	DestinationExists bool
-}
-
-type ImportOptions struct {
-	SourcePath      string
-	DestinationName string
-	ExistingVMs     []VM
+	Clipboard     bool
+	GuestAudio    bool
 }
 
 func (k VMKind) Valid() bool {
 	switch k {
-	case VMKindTemplate, VMKindWorkspace, VMKindUnmarked:
+	case VMKindTemplate, VMKindWorkspace:
 		return true
 	default:
 		return false
@@ -158,7 +124,7 @@ func (k VMKind) Valid() bool {
 
 func (f FolderAccess) Valid() bool {
 	switch f {
-	case FolderNoFolder, FolderReadHere, FolderEditHere:
+	case FolderNoFolder, FolderReadFolder, FolderEditFolder:
 		return true
 	default:
 		return false

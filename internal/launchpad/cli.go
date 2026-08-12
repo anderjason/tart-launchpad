@@ -13,7 +13,7 @@ func ParsePlanArgs(args []string) (RunOptions, error) {
 	options := RunOptions{
 		FolderAccess:  FolderNoFolder,
 		NetworkAccess: NetworkOffline,
-		CWD:           cwd,
+		ProjectPath:   cwd,
 	}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -43,20 +43,18 @@ func ParsePlanArgs(args []string) (RunOptions, error) {
 				return RunOptions{}, err
 			}
 			options.NetworkAccess = NetworkAccess(value)
-		case "--cwd":
+		case "--project-folder":
 			value, err := next()
 			if err != nil {
 				return RunOptions{}, err
 			}
-			options.CWD = value
+			options.ProjectPath = value
+		case "--clipboard":
+			options.Clipboard = true
+		case "--guest-audio":
+			options.GuestAudio = true
 		case "--template-read-only":
 			options.TemplateReadOnly = true
-		case "--volume":
-			value, err := next()
-			if err != nil {
-				return RunOptions{}, err
-			}
-			options.VolumePaths = append(options.VolumePaths, value)
 		default:
 			return RunOptions{}, fmt.Errorf("%w: unknown plan option %q", ErrUsage, arg)
 		}

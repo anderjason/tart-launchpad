@@ -1,7 +1,6 @@
 package launchpad
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/help"
@@ -25,47 +24,13 @@ const (
 	modeConfirm
 )
 
-func (mode inputMode) label() string {
-	switch mode {
-	case modeInsert:
-		return "INSERT"
-	case modeFilter:
-		return "FILTER"
-	case modeConfirm:
-		return "CONFIRM"
-	default:
-		return "NORMAL"
-	}
-}
-
-func (mode inputMode) capturesText() bool {
-	return mode == modeInsert || mode == modeFilter || mode == modeConfirm
-}
-
-func modeChip(mode inputMode) string {
-	switch mode {
-	case modeInsert:
-		return insertChipStyle.Render(mode.label())
-	case modeFilter:
-		return filterChipStyle.Render(mode.label())
-	case modeConfirm:
-		return confirmChipStyle.Render(mode.label())
-	default:
-		return normalChipStyle.Render(mode.label())
-	}
-}
-
 const (
 	frameDefaultWidth = 96
 	frameMinWidth     = 48
 	frameMaxWidth     = 118
-	twoPaneMinWidth   = 88
-	// title, spacing, and contextual keys
-	frameChromeHeight = 3
-	// pane title, subtitle, blank
-	paneChromeHeight = 3
-	minBodyHeight    = 3
-	diagramMinWidth  = 70
+	// title, context, spacing, and contextual keys
+	frameChromeHeight = 5
+	minBodyHeight     = 3
 )
 
 func (m model) frameWidth() int {
@@ -88,36 +53,15 @@ func (m model) bodyHeight() int {
 	if m.height <= 0 {
 		return 0
 	}
-	height := m.height - frameChromeHeight
+	chromeHeight := frameChromeHeight
+	if m.status != "" {
+		chromeHeight += 2
+	}
+	height := m.height - chromeHeight
 	if height < minBodyHeight {
 		return minBodyHeight
 	}
 	return height
-}
-
-// paneBodyHeight is how many content rows a pane can show once its own title
-// rows are accounted for. Screens window their content to this.
-func (m model) paneBodyHeight() int {
-	height := m.bodyHeight()
-	if height <= 0 {
-		return 0
-	}
-	height -= paneChromeHeight
-	if height < minBodyHeight {
-		return minBodyHeight
-	}
-	return height
-}
-
-func (m model) twoPane() bool {
-	return m.frameWidth() >= twoPaneMinWidth
-}
-
-func (m model) railWidth() int {
-	if m.frameWidth() >= 104 {
-		return 34
-	}
-	return 30
 }
 
 func (m model) mainPaneWidth() int {
@@ -135,12 +79,29 @@ type framePage struct {
 	Danger bool
 }
 
-// renderFrame keeps the everyday surface deliberately quiet. The screen body
-// owns attention; boundary details appear in review, where the user needs to
-// verify them, rather than occupying every decision along the way.
+type noticeKind int
+
+const (
+	noticeNeutral noticeKind = iota
+	noticeSuccess
+	noticeAttention
+)
+
+// renderFrame keeps navigation context in one stable row. Dangerous screens
+// use the same content in the danger style so the frame matches the action.
 func (m model) renderFrame(page framePage) string {
 	width := m.frameWidth()
-	lines := []string{titleStyle.Render("Tart Launchpad"), "", strings.TrimRight(page.Body, "\n")}
+	trail := strings.Join(page.Trail, " / ")
+	contextStyle := mutedStyle
+	if page.Danger {
+		contextStyle = dangerStyle
+	}
+	context := rowBetween(contextStyle.Render(trail), contextStyle.Render(page.Step), width)
+	lines := []string{titleStyle.Render("Tart Launchpad")}
+	if trail != "" || page.Step != "" {
+		lines = append(lines, context)
+	}
+	lines = append(lines, "", strings.TrimRight(page.Body, "\n"))
 	if status := m.statusRow(width); status != "" {
 		lines = append(lines, "", status)
 	}
@@ -154,70 +115,22 @@ func (m model) glyphs() glyphSet {
 	return m.theme.glyphs
 }
 
-// hostContext is the one place that reports host readiness, so no screen has
-// to interrupt a decision to say it.
-func (m model) hostContext() string {
-	parts := []string{}
-	if m.loadingVMs || m.loadingVolumes {
-		parts = append(parts, "loading…")
-	} else {
-		parts = append(parts, fmt.Sprintf("%d VMs", len(m.vms)))
-	}
-	switch {
-	case !m.softnetStatusKnown:
-		parts = append(parts, "softnet ?")
-	case m.softnetIsReady:
-		parts = append(parts, "softnet ready")
-	default:
-		parts = append(parts, "softnet needs setup")
-	}
-	return strings.Join(parts, " · ")
-}
-
 // statusRow is the single place feedback appears: a validation message, the
 // result of the last action, or a host condition that will bite at run time.
 func (m model) statusRow(width int) string {
 	glyphs := m.theme.glyphs
-	if m.screen != screenMessage && m.message != "" {
-		message := glyphs.Warn + " " + flattenLine(m.message)
-		return clampPlainWidth(warningStyle.Render(message), message, width)
-	}
 	if m.status != "" {
 		status := glyphs.Bullet + " " + flattenLine(m.status)
-		return clampPlainWidth(successStyle.Render(status), status, width)
-	}
-	if advisory := m.advisory(); advisory != "" {
-		advisory = glyphs.Warn + " " + advisory
-		return clampPlainWidth(warningStyle.Render(advisory), advisory, width)
-	}
-	if len(m.cfg.PendingCleanup) > 0 && m.screen == screenHome {
-		pending := glyphs.Warn + " pending cleanup: " + strings.Join(m.cfg.PendingCleanup, ", ")
-		return clampPlainWidth(warningStyle.Render(pending), pending, width)
-	}
-	return ""
-}
-
-// advisory surfaces host conditions that will make a chosen boundary fail at
-// run time. It never changes the plan; it only tells the truth early.
-func (m model) advisory() string {
-	if m.softnetStatusKnown && !m.softnetIsReady && m.screenTouchesSoftnet() {
-		if m.screen == screenReview || m.screen == screenExecute {
-			return "Set up Softnet before running."
+		style := selectedStyle
+		switch m.statusKind {
+		case noticeSuccess:
+			style = successStyle
+		case noticeAttention:
+			style = attentionStyle
 		}
-		return "Softnet needs setup for these options."
+		return clampPlainWidth(style.Render(status), status, width)
 	}
 	return ""
-}
-
-func (m model) screenTouchesSoftnet() bool {
-	switch m.screen {
-	case screenNetwork, screenLANCIDR, screenLANCIDRText:
-		return true
-	case screenReview, screenExecute:
-		return planRequiresSoftnet(m.plan)
-	default:
-		return false
-	}
 }
 
 // hintRow shows only keys that are useful at this moment. Input modes reveal
@@ -253,55 +166,6 @@ func helpLine(items []string) string {
 		))
 	}
 	return helpStyle.Render(help.New().ShortHelpView(bindings))
-}
-
-// joinPanes places the focused column beside the always-on rail. On a narrow
-// terminal the rail stacks above the body instead of disappearing: the
-// boundary being assembled has to stay readable at every width.
-func (m model) joinPanes(main string, rail string) string {
-	main = strings.TrimRight(main, "\n")
-	rail = strings.TrimRight(rail, "\n")
-	if rail == "" {
-		return main
-	}
-	if !m.twoPane() {
-		return rail + "\n\n" + main
-	}
-
-	height := max(lipgloss.Height(main), lipgloss.Height(rail))
-	if bodyHeight := m.bodyHeight(); bodyHeight > height {
-		height = bodyHeight
-	}
-	mainBlock := lipgloss.NewStyle().Width(m.mainPaneWidth()).Height(height).Render(main)
-	railBlock := lipgloss.NewStyle().Width(m.railWidth()).Height(height).Render(rail)
-	divider := verticalRule(m.glyphs().VRule, height)
-	return lipgloss.JoinHorizontal(lipgloss.Top, mainBlock, " ", divider, " ", railBlock)
-}
-
-func verticalRule(glyph string, height int) string {
-	if height <= 0 {
-		return ""
-	}
-	lines := make([]string, height)
-	for i := range lines {
-		lines[i] = ruleStyle.Render(glyph)
-	}
-	return strings.Join(lines, "\n")
-}
-
-func (m model) fitBody(body string) string {
-	height := m.bodyHeight()
-	if height <= 0 {
-		return body
-	}
-	lines := strings.Split(body, "\n")
-	if len(lines) > height {
-		lines = lines[:height]
-	}
-	for len(lines) < height {
-		lines = append(lines, "")
-	}
-	return strings.Join(lines, "\n")
 }
 
 func rowBetween(left string, right string, width int) string {

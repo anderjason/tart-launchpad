@@ -2,48 +2,48 @@ package launchpad
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 )
-
-const vmArchiveExtension = ".tvm"
-
-const VMArchiveSensitiveStateWarning = "Exported VM files may contain secrets, credentials, browser sessions, source code, or other sensitive state."
 
 func BuildRunPlan(cfg Config, options RunOptions) (Plan, error) {
 	if options.VMName == "" {
 		return Plan{}, fmt.Errorf("%w: --vm is required", ErrUsage)
 	}
-	if options.CWD == "" {
-		return Plan{}, fmt.Errorf("%w: cwd is required", ErrUsage)
-	}
 	if err := ValidateCanonicalTerms(options.FolderAccess, options.NetworkAccess); err != nil {
 		return Plan{}, err
+	}
+	if options.FolderAccess != FolderNoFolder && strings.TrimSpace(options.ProjectPath) == "" {
+		return Plan{}, fmt.Errorf("%w: project folder is required for %s", ErrUsage, options.FolderAccess)
+	}
+	projectPath := options.ProjectPath
+	if options.FolderAccess == FolderNoFolder {
+		projectPath = ""
 	}
 
 	hostAccess := HostAccessGrant{
 		FolderAccess: options.FolderAccess,
-		ProjectPath:  options.CWD,
-		VolumePaths:  append([]string(nil), options.VolumePaths...),
+		ProjectPath:  projectPath,
+		Clipboard:    options.Clipboard,
+		GuestAudio:   options.GuestAudio,
 	}
-	annotatedArgs, err := runArgsAnnotated(cfg, options.VMName, hostAccess, options.NetworkAccess, options.TemplateReadOnly)
+	args, err := runArgs(cfg, options.VMName, hostAccess, options.NetworkAccess, options.TemplateReadOnly)
 	if err != nil {
 		return Plan{}, err
 	}
-	args := annotatedArgValues(annotatedArgs)
 	return Plan{
-		Title:         fmt.Sprintf("Run %s", options.VMName),
-		Prerequisites: PlanPrerequisites{Softnet: networkUsesSoftnet(options.NetworkAccess)},
+		Title: fmt.Sprintf("Run %s", options.VMName),
 		Review: runPlanReview(PlanReview{
-			FolderAccess:  hostAccess.FolderAccess,
-			NetworkAccess: options.NetworkAccess,
-			VolumePaths:   hostAccess.VolumePaths,
+			FolderAccess:         hostAccess.FolderAccess,
+			ProjectPath:          hostAccess.ProjectPath,
+			NetworkAccess:        options.NetworkAccess,
+			Clipboard:            hostAccess.Clipboard,
+			GuestAudio:           hostAccess.GuestAudio,
+			TemplateDiskReadOnly: options.TemplateReadOnly,
 		}),
-		Steps: []CommandStep{configureStep(options.VMName), {
-			Kind:          CommandStepRun,
-			Label:         "run",
-			Args:          args,
-			AnnotatedArgs: annotatedArgs,
+		Steps: []CommandStep{{
+			Kind:  CommandStepRun,
+			Label: "run",
+			Args:  args,
 		}},
 	}, nil
 }
@@ -61,9 +61,10 @@ func BuildNewFromTemplatePlan(cfg Config, options NewFromTemplateOptions) (Plan,
 	runPlan, err := BuildRunPlan(cfg, RunOptions{
 		VMName:        options.NewName,
 		FolderAccess:  options.FolderAccess,
+		ProjectPath:   options.ProjectPath,
 		NetworkAccess: options.NetworkAccess,
-		CWD:           options.CWD,
-		VolumePaths:   options.VolumePaths,
+		Clipboard:     options.Clipboard,
+		GuestAudio:    options.GuestAudio,
 	})
 	if err != nil {
 		return Plan{}, err
@@ -77,10 +78,10 @@ func BuildNewFromTemplatePlan(cfg Config, options NewFromTemplateOptions) (Plan,
 	steps = append(steps, runPlan.Steps...)
 
 	plan := Plan{
-		Title:         fmt.Sprintf("New %s from %s", options.RunDuration, options.TemplateName),
-		Review:        runPlan.Review,
-		Prerequisites: runPlan.Prerequisites,
-		Steps:         steps,
+		Title:     fmt.Sprintf("New %s from %s", options.RunDuration, options.TemplateName),
+		Review:    runPlan.Review,
+		Steps:     steps,
+		CreatedVM: options.NewName,
 	}
 	if options.RunDuration == RunDurationTemporaryRun {
 		plan.TemporaryVM = options.NewName
@@ -133,83 +134,15 @@ func BuildDeletePlan(vmName string) (Plan, error) {
 	}, nil
 }
 
-func BuildExportPlan(options ExportOptions) (Plan, error) {
-	vmName := strings.TrimSpace(options.VMName)
-	if vmName == "" {
-		return Plan{}, fmt.Errorf("%w: VM name is required", ErrUsage)
-	}
-	if options.VMKind != VMKindTemplate && options.VMKind != VMKindWorkspace {
-		return Plan{}, fmt.Errorf("%w: export requires a template or workspace VM", ErrUsage)
-	}
-	destinationPath := strings.TrimSpace(options.DestinationPath)
-	if destinationPath == "" {
-		return Plan{}, fmt.Errorf("%w: export destination path is required", ErrUsage)
-	}
-	if options.DestinationExists {
-		return Plan{}, fmt.Errorf("%w: export destination already exists: %s", ErrUsage, destinationPath)
-	}
-	return Plan{
-		Title:      fmt.Sprintf("Export %s", vmName),
-		Review:     PlanReview{Verb: "export"},
-		ExportPath: destinationPath,
-		Warnings:   []string{VMArchiveSensitiveStateWarning},
-		Steps: []CommandStep{{
-			Kind:  CommandStepExport,
-			Label: "export",
-			Args:  []string{"tart", "export", vmName, destinationPath},
-		}},
-	}, nil
-}
-
-func BuildImportPlan(options ImportOptions) (Plan, error) {
-	sourcePath := strings.TrimSpace(options.SourcePath)
-	if sourcePath == "" {
-		return Plan{}, fmt.Errorf("%w: import source path is required", ErrUsage)
-	}
-	if filepath.Ext(sourcePath) != vmArchiveExtension {
-		return Plan{}, fmt.Errorf("%w: import source must be a .tvm file", ErrUsage)
-	}
-	destinationName := strings.TrimSpace(options.DestinationName)
-	if destinationName == "" {
-		return Plan{}, fmt.Errorf("%w: destination VM name is required", ErrUsage)
-	}
-	for _, vm := range options.ExistingVMs {
-		if vm.Name == destinationName {
-			return Plan{}, fmt.Errorf("%w: destination VM already exists: %s", ErrUsage, destinationName)
-		}
-	}
-	return Plan{
-		Title:        fmt.Sprintf("Import %s", destinationName),
-		Review:       PlanReview{Verb: "import"},
-		ImportPath:   sourcePath,
-		ImportVMName: destinationName,
-		Steps: []CommandStep{{
-			Kind:  CommandStepImport,
-			Label: "import",
-			Args:  []string{"tart", "import", sourcePath, destinationName},
-		}},
-	}, nil
-}
-
-
 func runPlanReview(review PlanReview) PlanReview {
 	review.Verb = "run"
 	review.ShowBoundaries = true
-	review.Clipboard = "off"
-	review.Audio = "off"
-	review.VolumePaths = append([]string(nil), review.VolumePaths...)
 	return review
 }
 
 func (p Plan) ReviewVerb() string {
 	if p.Review.Verb != "" {
 		return p.Review.Verb
-	}
-	if p.ExportPath != "" {
-		return "export"
-	}
-	if p.ImportPath != "" {
-		return "import"
 	}
 	if p.ShowsBoundaries() {
 		return "run"
@@ -221,105 +154,59 @@ func (p Plan) ShowsBoundaries() bool {
 	if p.Review.ShowBoundaries {
 		return true
 	}
-	return p.RenameFrom == "" && p.DeleteVM == "" && p.ExportPath == "" && p.ImportPath == ""
+	return p.RenameFrom == "" && p.DeleteVM == ""
 }
 
 func runArgs(cfg Config, vmName string, hostAccess HostAccessGrant, network NetworkAccess, templateReadOnly bool) ([]string, error) {
-	annotatedArgs, err := runArgsAnnotated(cfg, vmName, hostAccess, network, templateReadOnly)
-	if err != nil {
-		return nil, err
+	args := []string{"tart", "run"}
+	if !hostAccess.Clipboard {
+		args = append(args, "--no-clipboard")
 	}
-	return annotatedArgValues(annotatedArgs), nil
-}
-
-func runArgsAnnotated(cfg Config, vmName string, hostAccess HostAccessGrant, network NetworkAccess, templateReadOnly bool) ([]AnnotatedArg, error) {
-	args := []AnnotatedArg{
-		{Value: "tart"},
-		{Value: "run"},
-		{Value: "--no-clipboard", Provenance: "clipboard off"},
-		{Value: "--no-audio", Provenance: "audio off"},
+	if !hostAccess.GuestAudio {
+		args = append(args, "--no-audio")
 	}
 
 	folderArgs, err := hostAccess.FolderTartDirArgs()
 	if err != nil {
 		return nil, err
 	}
-	for _, arg := range folderArgs {
-		args = append(args, AnnotatedArg{Value: arg, Provenance: string(hostAccess.FolderAccess)})
-	}
+	args = append(args, folderArgs...)
 
-	lanCIDRs := strings.Join(cfg.Network.LANCIDRs, ",")
+	lanCIDRs := ""
+	if network == NetworkLAN || network == NetworkLANAndInternet {
+		configuredLANCIDRs, err := normalizePrivateIPv4CIDRs(cfg.Network.LANCIDRs)
+		if err != nil {
+			return nil, err
+		}
+		lanCIDRs = strings.Join(configuredLANCIDRs, ",")
+	}
 	switch network {
 	case NetworkOffline:
-		args = append(args, AnnotatedArg{Value: "--net-softnet-block=0.0.0.0/0", Provenance: string(NetworkOffline)})
+		args = append(args, "--net-softnet-block=0.0.0.0/0")
 	case NetworkInternet:
-		args = append(args, AnnotatedArg{Value: "--net-softnet", Provenance: string(NetworkInternet)})
+		args = append(args, "--net-softnet")
 	case NetworkHost:
-		args = append(args, AnnotatedArg{Value: "--net-host", Provenance: string(NetworkHost)})
+		args = append(args, "--net-host")
 	case NetworkLAN:
 		if lanCIDRs == "" {
 			return nil, fmt.Errorf("%w: lan requires at least one configured LAN CIDR", ErrUsage)
 		}
-		args = append(args,
-			AnnotatedArg{Value: "--net-softnet-block=0.0.0.0/0", Provenance: string(NetworkLAN)},
-			AnnotatedArg{Value: "--net-softnet-allow=" + lanCIDRs, Provenance: string(NetworkLAN)},
-		)
+		args = append(args, "--net-softnet-block=0.0.0.0/0", "--net-softnet-allow="+lanCIDRs)
 	case NetworkLANAndInternet:
 		if lanCIDRs == "" {
 			return nil, fmt.Errorf("%w: lan-and-internet requires at least one configured LAN CIDR", ErrUsage)
 		}
-		args = append(args,
-			AnnotatedArg{Value: "--net-softnet", Provenance: string(NetworkLANAndInternet)},
-			AnnotatedArg{Value: "--net-softnet-allow=" + lanCIDRs, Provenance: string(NetworkLANAndInternet)},
-		)
+		args = append(args, "--net-softnet", "--net-softnet-allow="+lanCIDRs)
 	default:
 		return nil, fmt.Errorf("%w: invalid network access %q", ErrUsage, network)
 	}
 
 	if templateReadOnly {
-		args = append(args, AnnotatedArg{Value: "--root-disk-opts=ro", Provenance: "template read-only"})
+		args = append(args, "--root-disk-opts=ro")
 	}
 
-	volumeArgs, err := hostAccess.VolumeTartDirArgs()
-	if err != nil {
-		return nil, err
-	}
-	for _, arg := range volumeArgs {
-		args = append(args, AnnotatedArg{Value: arg, Provenance: "volume read-write"})
-	}
-
-	args = append(args, AnnotatedArg{Value: vmName})
+	args = append(args, vmName)
 	return args, nil
-}
-
-func annotatedArgValues(args []AnnotatedArg) []string {
-	values := make([]string, 0, len(args))
-	for _, arg := range args {
-		values = append(values, arg.Value)
-	}
-	return values
-}
-
-func networkUsesSoftnet(network NetworkAccess) bool {
-	switch network {
-	case NetworkOffline, NetworkInternet, NetworkLAN, NetworkLANAndInternet:
-		return true
-	default:
-		return false
-	}
-}
-
-func configureStep(vmName string) CommandStep {
-	return CommandStep{
-		Kind:  CommandStepConfigure,
-		Label: "configure",
-		Args: []string{
-			"tart", "set", vmName,
-			"--cpu", "4",
-			"--memory", "8192",
-			"--display", "1280x800",
-		},
-	}
 }
 
 func ShellQuote(args []string) string {

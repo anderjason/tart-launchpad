@@ -20,21 +20,25 @@ _Avoid_: base image
 A VM kind for a VM that is kept around and run directly for ongoing work.
 _Avoid_: project VM
 
-**Unmarked VM**:
-A VM kind for a local Tart VM that Launchpad has not categorized.
-_Avoid_: unknown VM
-
 **Host access grant**:
-The combined folder and mounted-volume access given to a Launchpad-shaped run.
+The combined project-folder, clipboard, and guest-audio connections given to a Launchpad-shaped run.
 _Avoid_: mount policy, storage profile
 
 **Folder access**:
-The current-directory access choice for a Launchpad-shaped run.
+The read/write choice for the selected project folder in a Launchpad-shaped run.
 _Avoid_: directory mode
 
-**Volume access**:
-The optional mounted-host-volume access chosen for a Launchpad-shaped run.
-_Avoid_: disk access
+**Project folder**:
+The one explicit host directory shared with a Launchpad-shaped run. It initially uses the launch directory but can be replaced.
+_Avoid_: here, current directory
+
+**Clipboard sharing**:
+The per-run choice that lets clipboard contents cross between the host and guest.
+_Avoid_: clipboard access
+
+**Guest audio**:
+The per-run choice that lets guest audio play through the host.
+_Avoid_: microphone access
 
 **Network access**:
 The network reachability choice for a Launchpad-shaped run.
@@ -53,11 +57,11 @@ The sequence of product choices that turns a selected VM or VM archive into a re
 _Avoid_: wizard
 
 **Reviewable plan**:
-The generated Tart commands plus the product facts needed to review access, warnings, prerequisites, and cleanup behavior before execution.
+The generated Tart commands plus the product facts needed to review access, warnings, and cleanup behavior before execution.
 _Avoid_: command list
 
 **Host environment**:
-The host facts Launchpad reads, such as the current project path, mounted volumes, and detected LAN CIDRs.
+The host facts Launchpad reads, such as the current project path and detected LAN CIDRs.
 _Avoid_: system service
 
 ## Relationships
@@ -73,9 +77,6 @@ _Avoid_: system service
 
 > **Dev:** "When the user chooses a **Template**, can the **Launchpad flow** run it directly?"
 > **Domain expert:** "Only as a read-only **Launchpad-shaped run**. A normal run should create a **Workspace** or a temporary run."
-
-> **Dev:** "Should selected USB drives be part of **Folder access**?"
-> **Domain expert:** "No. They are **Volume access**, but both choices combine into one **Host access grant** for review and command generation."
 
 ## Flagged Ambiguities
 
