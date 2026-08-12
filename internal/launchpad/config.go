@@ -36,7 +36,6 @@ type LastRunConfig struct {
 	FolderAccess  FolderAccess  `json:"folder_access"`
 	ProjectPath   string        `json:"project_path,omitempty"`
 	NetworkAccess NetworkAccess `json:"network_access"`
-	VolumePaths   []string      `json:"volume_paths,omitempty"`
 	Clipboard     bool          `json:"clipboard,omitempty"`
 	GuestAudio    bool          `json:"guest_audio,omitempty"`
 	At            string        `json:"at"`

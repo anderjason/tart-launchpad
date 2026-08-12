@@ -25,9 +25,6 @@ func TestBuildRunPlanReadHereInternet(t *testing.T) {
 	if !reflect.DeepEqual(plan.Steps[1].Args, wantRun) {
 		t.Fatalf("run args\n got %#v\nwant %#v", plan.Steps[1].Args, wantRun)
 	}
-	if !plan.Prerequisites.Softnet {
-		t.Fatal("Softnet prerequisite = false, want true")
-	}
 	if !plan.Review.ShowBoundaries || plan.Review.FolderAccess != FolderReadFolder || plan.Review.NetworkAccess != NetworkInternet {
 		t.Fatalf("review = %#v, want run boundary review", plan.Review)
 	}
@@ -47,9 +44,6 @@ func TestBuildRunPlanEditHereHost(t *testing.T) {
 	wantRun := []string{"tart", "run", "--no-clipboard", "--no-audio", "--dir=project:/tmp/project", "--net-host", "dev"}
 	if !reflect.DeepEqual(plan.Steps[1].Args, wantRun) {
 		t.Fatalf("run args\n got %#v\nwant %#v", plan.Steps[1].Args, wantRun)
-	}
-	if plan.Prerequisites.Softnet {
-		t.Fatal("Softnet prerequisite = true, want false")
 	}
 }
 
@@ -159,66 +153,6 @@ func TestBuildRunPlanConfiguresResourcesBeforeRun(t *testing.T) {
 	want := []string{"tart", "set", "dev", "--cpu", "4", "--memory", "8192", "--display", "1280x800"}
 	if !reflect.DeepEqual(plan.Steps[0].Args, want) {
 		t.Fatalf("configure args\n got %#v\nwant %#v", plan.Steps[0].Args, want)
-	}
-}
-
-func TestBuildRunPlanAddsSelectedVolumesReadWrite(t *testing.T) {
-	cfg := DefaultConfig()
-	plan, err := BuildRunPlan(cfg, RunOptions{
-		VMName:        "dev",
-		FolderAccess:  FolderNoFolder,
-		NetworkAccess: NetworkOffline,
-		ProjectPath:   "/tmp/project",
-		VolumePaths:   []string{"/Volumes/External SSD", "/Volumes/Backup"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantRun := []string{"tart", "run", "--no-clipboard", "--no-audio", "--net-softnet-block=0.0.0.0/0", "--dir=volume-external-ssd:/Volumes/External SSD", "--dir=volume-backup:/Volumes/Backup", "dev"}
-	if !reflect.DeepEqual(plan.Steps[1].Args, wantRun) {
-		t.Fatalf("run args\n got %#v\nwant %#v", plan.Steps[1].Args, wantRun)
-	}
-	wantVolumes := []string{"/Volumes/External SSD", "/Volumes/Backup"}
-	if !reflect.DeepEqual(plan.Review.VolumePaths, wantVolumes) {
-		t.Fatalf("review volumes\n got %#v\nwant %#v", plan.Review.VolumePaths, wantVolumes)
-	}
-}
-
-func TestHostAccessGrantBuildsFolderAndVolumeArgs(t *testing.T) {
-	grant := HostAccessGrant{
-		FolderAccess: FolderReadFolder,
-		ProjectPath:  "/tmp/project",
-		VolumePaths:  []string{"/Volumes/External SSD"},
-	}
-
-	got, err := grant.TartDirArgs()
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []string{"--dir=project:/tmp/project:ro", "--dir=volume-external-ssd:/Volumes/External SSD"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("dir args\n got %#v\nwant %#v", got, want)
-	}
-}
-
-func TestBuildRunPlanRejectsBlankVolumePath(t *testing.T) {
-	cfg := DefaultConfig()
-	_, err := BuildRunPlan(cfg, RunOptions{
-		VMName:        "dev",
-		FolderAccess:  FolderNoFolder,
-		NetworkAccess: NetworkOffline,
-		ProjectPath:   "/tmp/project",
-		VolumePaths:   []string{""},
-	})
-	if err == nil {
-		t.Fatal("expected error")
-	}
-}
-
-func TestVolumeShareNameSanitizesPath(t *testing.T) {
-	got := volumeShareName("/Volumes/My Backup!")
-	if got != "volume-my-backup" {
-		t.Fatalf("share name = %q, want volume-my-backup", got)
 	}
 }
 

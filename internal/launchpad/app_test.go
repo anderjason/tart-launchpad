@@ -191,137 +191,6 @@ func TestNetworkChoiceAdvancesToReview(t *testing.T) {
 	}
 }
 
-func TestMissingSoftnetAdvisoryFitsReview(t *testing.T) {
-	m := workspaceRunFixture().model()
-	m.width = frameDefaultWidth + 2
-	m.screen = screenReview
-	m.softnetStatusKnown = true
-	m.softnetIsReady = false
-	m.plan = Plan{Prerequisites: PlanPrerequisites{Softnet: true}}
-
-	status := m.statusRow(m.frameWidth())
-	if !strings.Contains(status, "Set up Softnet before running.") {
-		t.Fatalf("status = %q, want concise Softnet setup guidance", status)
-	}
-	if lipgloss.Width(status) > m.frameWidth() {
-		t.Fatalf("status width = %d, frame width = %d", lipgloss.Width(status), m.frameWidth())
-	}
-}
-
-func TestNetworkChoiceWithHostVolumesAdvancesToVolumeScreen(t *testing.T) {
-	m := newModelWithVolumes(DefaultConfig(), "", []VM{{
-		Name:  "dev",
-		Kind:  VMKindWorkspace,
-		State: "stopped",
-	}}, []HostVolume{{
-		ID:   "disk7s1",
-		Path: "/Volumes/External SSD",
-		Name: "External SSD",
-		Size: 1000204886016,
-	}})
-	m.selectedVM = m.vms[0]
-	m.flow = flowRunExisting
-	m.screen = screenNetwork
-	m.folderAccess = FolderNoFolder
-	m.cursor = indexNetwork(NetworkOffline)
-
-	updated, _ := m.handleKey("enter")
-	got := updated.(model)
-
-	if got.screen != screenVolumes {
-		t.Fatalf("screen = %v, want %v", got.screen, screenVolumes)
-	}
-	if len(got.selectedVolumePaths()) != 0 {
-		t.Fatalf("selected volumes = %#v, want none", got.selectedVolumePaths())
-	}
-}
-
-func TestVolumeScreenToggleAndContinueAddsSelectedVolumeToPlan(t *testing.T) {
-	m := volumeSelectionFixture().model()
-	m.selectedVM = m.vms[0]
-	m.flow = flowRunExisting
-	m.screen = screenVolumes
-	m.folderAccess = FolderNoFolder
-	m.networkAccess = NetworkOffline
-	m.cursor = 1
-
-	updated, _ := m.handleKey(" ")
-	got := updated.(model)
-	updated, _ = got.handleKey("enter")
-	got = updated.(model)
-
-	if got.screen != screenReview {
-		t.Fatalf("screen = %v, want %v", got.screen, screenReview)
-	}
-	runArgs := got.plan.Steps[1].Args
-	if !slices.Contains(runArgs, "--dir=volume-backup:/Volumes/Backup") {
-		t.Fatalf("run args = %#v, want selected volume", runArgs)
-	}
-	if slices.Contains(runArgs, "--dir=volume-external-ssd:/Volumes/External SSD") {
-		t.Fatalf("run args = %#v, did not want unselected volume", runArgs)
-	}
-	if got.plan.Review.VolumeIDs["/Volumes/Backup"] != "disk8s1" {
-		t.Fatalf("reviewed volume IDs = %#v, want Backup device identity", got.plan.Review.VolumeIDs)
-	}
-}
-
-func TestExecutionRejectsVolumeChangedAfterReview(t *testing.T) {
-	m := volumeSelectionFixture().model()
-	m.tart = &fakeTart{}
-	m.volumeLister = fakeVolumeLister{volumes: []HostVolume{{
-		ID:   "disk9s1",
-		Path: "/Volumes/Backup",
-		Name: "Replacement",
-	}}}
-	m.plan = Plan{
-		Review: PlanReview{
-			VolumePaths: []string{"/Volumes/Backup"},
-			VolumeIDs:   map[string]string{"/Volumes/Backup": "disk8s1"},
-		},
-		Steps: []CommandStep{{
-			Kind:  CommandStepRun,
-			Label: "run",
-			Args:  []string{"tart", "run", "dev", "--dir=volume-backup:/Volumes/Backup"},
-		}},
-	}
-
-	msg := m.executeCurrentStepCmd()().(executeStepFinishedMsg)
-
-	if msg.err == nil || !strings.Contains(msg.err.Error(), "changed after review") {
-		t.Fatalf("error = %v, want changed-volume rejection", msg.err)
-	}
-}
-
-func TestExecutionValidatesReviewedVolumesBeforeClone(t *testing.T) {
-	m := newModel(DefaultConfig(), filepath.Join(t.TempDir(), "config.json"), nil)
-	m.plan = temporaryExecutionPlan()
-	m.plan.Review.VolumePaths = []string{"/Volumes/Backup"}
-	m.plan.Review.VolumeIDs = map[string]string{"/Volumes/Backup": "disk8s1"}
-	m.volumeLister = fakeVolumeLister{volumes: []HostVolume{{
-		ID:   "disk9s1",
-		Path: "/Volumes/Backup",
-		Name: "Replacement",
-	}}}
-	tart := &fakeTart{}
-	m.tart = tart
-
-	updated, cmd := m.beginExecution()
-	got := updated.(model)
-
-	if cmd != nil {
-		t.Fatal("execution returned a clone command after boundary validation failed")
-	}
-	if !got.executeDone || !strings.Contains(got.executeErr, "changed after review") {
-		t.Fatalf("execution state = done %v, error %q", got.executeDone, got.executeErr)
-	}
-	if len(tart.calls) != 0 {
-		t.Fatalf("Tart calls = %#v, want none", tart.calls)
-	}
-	if len(got.cfg.PendingCleanup) != 0 {
-		t.Fatalf("pending cleanup = %#v, want none before clone", got.cfg.PendingCleanup)
-	}
-}
-
 func TestRenderFrameShowsTrailStepAndDangerContext(t *testing.T) {
 	m := newModel(DefaultConfig(), "", nil)
 	view := m.renderFrame(framePage{
@@ -336,36 +205,6 @@ func TestRenderFrameShowsTrailStepAndDangerContext(t *testing.T) {
 	}
 	if !strings.Contains(view, "review") {
 		t.Fatalf("frame does not show step:\n%s", view)
-	}
-}
-
-func TestVolumeScreenEnterWithNoSelectionsContinuesWithoutVolumeFlags(t *testing.T) {
-	m := newModelWithVolumes(DefaultConfig(), "", []VM{{
-		Name:  "dev",
-		Kind:  VMKindWorkspace,
-		State: "stopped",
-	}}, []HostVolume{{
-		ID:   "disk7s1",
-		Path: "/Volumes/External SSD",
-		Name: "External SSD",
-		Size: 1000204886016,
-	}})
-	m.selectedVM = m.vms[0]
-	m.flow = flowRunExisting
-	m.screen = screenVolumes
-	m.folderAccess = FolderNoFolder
-	m.networkAccess = NetworkOffline
-
-	updated, _ := m.handleKey("enter")
-	got := updated.(model)
-
-	if got.screen != screenReview {
-		t.Fatalf("screen = %v, want %v", got.screen, screenReview)
-	}
-	for _, arg := range got.plan.Steps[1].Args {
-		if strings.HasPrefix(arg, "--dir=volume-") {
-			t.Fatalf("run args = %#v, did not want volume flag", got.plan.Steps[1].Args)
-		}
 	}
 }
 
@@ -764,7 +603,7 @@ func TestReviewCancelReturnsHomeWithValidCursor(t *testing.T) {
 }
 
 func TestReviewBackReturnsToPreviousFlowScreen(t *testing.T) {
-	m := volumeSelectionFixture().model()
+	m := workspaceRunFixture().model()
 	m.selectedVM = m.vms[0]
 	m.flow = flowRunExisting
 	m.screen = screenNetwork
@@ -774,20 +613,14 @@ func TestReviewBackReturnsToPreviousFlowScreen(t *testing.T) {
 
 	updated, _ := m.handleKey("enter")
 	got := updated.(model)
-	if got.screen != screenVolumes {
-		t.Fatalf("screen = %v, want %v", got.screen, screenVolumes)
-	}
-
-	updated, _ = got.handleKey("enter")
-	got = updated.(model)
 	if got.screen != screenReview {
 		t.Fatalf("screen = %v, want %v", got.screen, screenReview)
 	}
 
 	updated, _ = got.handleKey("esc")
 	got = updated.(model)
-	if got.screen != screenVolumes {
-		t.Fatalf("screen = %v, want %v", got.screen, screenVolumes)
+	if got.screen != screenNetwork {
+		t.Fatalf("screen = %v, want %v", got.screen, screenNetwork)
 	}
 }
 
@@ -852,8 +685,8 @@ func TestExecutionRecordsPendingCleanupAfterTemporaryRunFailure(t *testing.T) {
 	if !got.executeDone {
 		t.Fatal("executeDone = false, want true")
 	}
-	if got.executeErr == "" {
-		t.Fatal("executeErr is empty, want run failure")
+	if !strings.Contains(got.executeErr, "run: boom") {
+		t.Fatalf("executeErr = %q, want Tart run failure", got.executeErr)
 	}
 	if len(got.cfg.PendingCleanup) != 1 || got.cfg.PendingCleanup[0] != "tmp-1" {
 		t.Fatalf("pending cleanup = %#v, want tmp-1", got.cfg.PendingCleanup)
@@ -1232,7 +1065,7 @@ func TestRenderHomeWithStaleCursorStillShowsSelection(t *testing.T) {
 	}
 }
 
-func TestReviewGroupsFolderAndVolumesAsHostAccessGrant(t *testing.T) {
+func TestReviewGroupsFolderAndPathAsHostAccessGrant(t *testing.T) {
 	m := newModel(DefaultConfig(), "", nil)
 	m.plan = Plan{Review: PlanReview{
 		FolderAccess:  FolderReadFolder,
@@ -1246,7 +1079,7 @@ func TestReviewGroupsFolderAndVolumesAsHostAccessGrant(t *testing.T) {
 	if !strings.Contains(view, "⎧ folder") {
 		t.Fatalf("review does not begin the host access grouping:\n%s", view)
 	}
-	if !strings.Contains(view, "⎩ volumes") {
+	if !strings.Contains(view, "⎩ path") {
 		t.Fatalf("review does not end the host access grouping:\n%s", view)
 	}
 }
@@ -1286,20 +1119,6 @@ func TestVMActionRunAdvancesToFolder(t *testing.T) {
 	}
 	if got.flow != flowRunExisting {
 		t.Fatalf("flow = %v, want %v", got.flow, flowRunExisting)
-	}
-}
-
-func TestVMActionRunStartsWithNoSelectedVolumes(t *testing.T) {
-	m := volumeSelectionFixture().model()
-	m.selectedVM = m.vms[0]
-	m.screen = screenVMAction
-	m.selectedVolumePath["/Volumes/External SSD"] = true
-
-	updated, _ := m.handleKey("enter")
-	got := updated.(model)
-
-	if len(got.selectedVolumePaths()) != 0 {
-		t.Fatalf("selected volumes = %#v, want none", got.selectedVolumePaths())
 	}
 }
 

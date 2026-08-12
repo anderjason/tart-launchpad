@@ -11,7 +11,6 @@ func TestLaunchpadIntentBuildsRunPlanFromHostEnvironment(t *testing.T) {
 		VM:            VM{Name: "dev", Kind: VMKindWorkspace},
 		FolderAccess:  FolderReadFolder,
 		NetworkAccess: NetworkHost,
-		VolumePaths:   []string{"/Volumes/External SSD"},
 	}
 	host := fakeHostEnvironment{
 		currentDirectory: "/tmp/project",
@@ -22,7 +21,7 @@ func TestLaunchpadIntentBuildsRunPlanFromHostEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := []string{"tart", "run", "--no-clipboard", "--no-audio", "--dir=project:/tmp/project:ro", "--net-host", "--dir=volume-external-ssd:/Volumes/External SSD", "dev"}
+	want := []string{"tart", "run", "--no-clipboard", "--no-audio", "--dir=project:/tmp/project:ro", "--net-host", "dev"}
 	if !reflect.DeepEqual(plan.Steps[1].Args, want) {
 		t.Fatalf("run args\n got %#v\nwant %#v", plan.Steps[1].Args, want)
 	}

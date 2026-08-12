@@ -25,13 +25,6 @@ Host integrations:
 - clipboard sharing is an independent per-run choice and is off by default
 - guest audio pass-through to the host is an independent per-run choice and is off by default
 
-Volume access:
-
-- mounted host volumes are optional and always unchecked by default
-- selected host volumes are shared read-write with Tart `--dir=<name>:/Volumes/<name>`
-- Launchpad lists only mounted non-system volumes
-- Launchpad does not mount, unmount, chmod, chown, use raw `--disk`, or fall back to another sharing mode
-
 Network access:
 
 - `offline`: outbound IPv4 blocked
@@ -51,8 +44,6 @@ Run duration:
 - Workspaces can be run after choosing host connections and network access.
 - Folder grants store an explicit resolved project-folder path separately from the access mode.
 - Clipboard and guest audio choices are shown with their consequences during review.
-- If mounted non-system volumes are connected, the TUI shows a volume checklist after network access and before review.
-- Volume choices are all off by default and selected volumes are attached read-write.
 - Templates are guarded from normal runs.
 - A template can create a new workspace.
 - A template can create a temporary run that is deleted afterward.
@@ -87,12 +78,6 @@ Folder access:
 no-folder   no --dir flag
 read-folder --dir=project:<selected project folder>:ro
 edit-folder --dir=project:<selected project folder>
-```
-
-Selected volumes:
-
-```text
---dir=volume-name:/Volumes/Name
 ```
 
 Network access:

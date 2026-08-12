@@ -2,7 +2,7 @@
 
 Choose what a Tart VM can touch before you run it.
 
-Tart Launchpad is a terminal interface for local Tart VMs. It asks about project-folder access, clipboard sharing, guest audio, network access, and optional mounted volumes. Before it runs, imports, or exports anything, it shows the exact Tart command.
+Tart Launchpad is a terminal interface for local Tart VMs. It asks about project-folder access, clipboard sharing, guest audio, and network access. Before it runs, imports, or exports anything, it shows the exact Tart command.
 
 ![Tart Launchpad with mock VMs](docs/demo/tart-launchpad.png)
 
@@ -24,7 +24,7 @@ go build -o tart-launchpad ./cmd/tart-launchpad
 ## Use it
 
 1. Select a VM. Launchpad treats ordinary VMs as workspaces by default. Mark a clean source VM as a template when you want to create new VMs from it.
-2. Choose host connections, network access, and any mounted volumes to share.
+2. Choose host connections and network access.
 3. Review the generated commands, then run them.
 
 Templates can create a workspace or a temporary VM, or run with a read-only root disk. Import and export each ask for a `.tvm` path before review.
@@ -61,14 +61,4 @@ Network access:
 - `lan`: allow configured local network ranges only.
 - `lan-and-internet`: allow configured local network ranges and the internet.
 
-Mounted host volumes are always off by default. Selected volumes are shared read-write. Launchpad never mounts, unmounts, or prepares host storage, and it does not use raw disks.
-
 Launchpad is not a security sandbox. It makes each run's selected host connections visible before execution.
-
-## Softnet setup
-
-Launchpad checks Softnet before an operation that needs it. It validates that Softnet resolves to its Homebrew Cellar installation and that the current account cannot replace the helper or its parent directories. If setup is needed, Launchpad prints the exact validated path and the two admin commands to run from an administrator shell.
-
-Do not substitute a path found with `command -v`; a project-controlled `PATH` could select an untrusted executable.
-
-Then run Launchpad as your normal user.

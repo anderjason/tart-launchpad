@@ -28,7 +28,6 @@ func BuildRunPlan(cfg Config, options RunOptions) (Plan, error) {
 	hostAccess := HostAccessGrant{
 		FolderAccess: options.FolderAccess,
 		ProjectPath:  projectPath,
-		VolumePaths:  append([]string(nil), options.VolumePaths...),
 		Clipboard:    options.Clipboard,
 		GuestAudio:   options.GuestAudio,
 	}
@@ -38,14 +37,11 @@ func BuildRunPlan(cfg Config, options RunOptions) (Plan, error) {
 	}
 	args := annotatedArgValues(annotatedArgs)
 	return Plan{
-		Title:         fmt.Sprintf("Run %s", options.VMName),
-		Prerequisites: PlanPrerequisites{Softnet: networkUsesSoftnet(options.NetworkAccess)},
+		Title: fmt.Sprintf("Run %s", options.VMName),
 		Review: runPlanReview(PlanReview{
 			FolderAccess:  hostAccess.FolderAccess,
 			ProjectPath:   hostAccess.ProjectPath,
 			NetworkAccess: options.NetworkAccess,
-			VolumePaths:   hostAccess.VolumePaths,
-			VolumeIDs:     cloneStringMap(options.VolumeIDs),
 			Clipboard:     hostAccess.Clipboard,
 			GuestAudio:    hostAccess.GuestAudio,
 		}),
@@ -75,8 +71,6 @@ func BuildNewFromTemplatePlan(cfg Config, options NewFromTemplateOptions) (Plan,
 		NetworkAccess: options.NetworkAccess,
 		Clipboard:     options.Clipboard,
 		GuestAudio:    options.GuestAudio,
-		VolumePaths:   options.VolumePaths,
-		VolumeIDs:     options.VolumeIDs,
 	})
 	if err != nil {
 		return Plan{}, err
@@ -90,11 +84,10 @@ func BuildNewFromTemplatePlan(cfg Config, options NewFromTemplateOptions) (Plan,
 	steps = append(steps, runPlan.Steps...)
 
 	plan := Plan{
-		Title:         fmt.Sprintf("New %s from %s", options.RunDuration, options.TemplateName),
-		Review:        runPlan.Review,
-		Prerequisites: runPlan.Prerequisites,
-		Steps:         steps,
-		CreatedVM:     options.NewName,
+		Title:     fmt.Sprintf("New %s from %s", options.RunDuration, options.TemplateName),
+		Review:    runPlan.Review,
+		Steps:     steps,
+		CreatedVM: options.NewName,
 	}
 	if options.RunDuration == RunDurationTemporaryRun {
 		plan.TemporaryVM = options.NewName
@@ -213,20 +206,7 @@ func BuildImportPlan(options ImportOptions) (Plan, error) {
 func runPlanReview(review PlanReview) PlanReview {
 	review.Verb = "run"
 	review.ShowBoundaries = true
-	review.VolumePaths = append([]string(nil), review.VolumePaths...)
-	review.VolumeIDs = cloneStringMap(review.VolumeIDs)
 	return review
-}
-
-func cloneStringMap(source map[string]string) map[string]string {
-	if len(source) == 0 {
-		return nil
-	}
-	clone := make(map[string]string, len(source))
-	for key, value := range source {
-		clone[key] = value
-	}
-	return clone
 }
 
 func (p Plan) ReviewVerb() string {
@@ -319,14 +299,6 @@ func runArgsAnnotated(cfg Config, vmName string, hostAccess HostAccessGrant, net
 		args = append(args, AnnotatedArg{Value: "--root-disk-opts=ro", Provenance: "template read-only"})
 	}
 
-	volumeArgs, err := hostAccess.VolumeTartDirArgs()
-	if err != nil {
-		return nil, err
-	}
-	for _, arg := range volumeArgs {
-		args = append(args, AnnotatedArg{Value: arg, Provenance: "volume read-write"})
-	}
-
 	args = append(args, AnnotatedArg{Value: vmName})
 	return args, nil
 }
@@ -337,15 +309,6 @@ func annotatedArgValues(args []AnnotatedArg) []string {
 		values = append(values, arg.Value)
 	}
 	return values
-}
-
-func networkUsesSoftnet(network NetworkAccess) bool {
-	switch network {
-	case NetworkOffline, NetworkInternet, NetworkLAN, NetworkLANAndInternet:
-		return true
-	default:
-		return false
-	}
 }
 
 func configureStep(vmName string) CommandStep {

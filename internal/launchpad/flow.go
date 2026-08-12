@@ -30,8 +30,6 @@ type LaunchpadIntent struct {
 	NetworkAccess         NetworkAccess
 	Clipboard             bool
 	GuestAudio            bool
-	VolumePaths           []string
-	VolumeIDs             map[string]string
 	ExistingVMs           []VM
 }
 
@@ -72,8 +70,6 @@ func (i LaunchpadIntent) buildRunPlan(cfg Config, host HostEnvironment, vmName s
 		Clipboard:        i.Clipboard,
 		GuestAudio:       i.GuestAudio,
 		TemplateReadOnly: templateReadOnly,
-		VolumePaths:      i.VolumePaths,
-		VolumeIDs:        i.VolumeIDs,
 	})
 }
 
@@ -95,8 +91,6 @@ func (i LaunchpadIntent) buildNewFromTemplatePlan(cfg Config, host HostEnvironme
 		NetworkAccess: i.NetworkAccess,
 		Clipboard:     i.Clipboard,
 		GuestAudio:    i.GuestAudio,
-		VolumePaths:   i.VolumePaths,
-		VolumeIDs:     i.VolumeIDs,
 	})
 }
 

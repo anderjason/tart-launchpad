@@ -145,38 +145,11 @@ func (m model) statusRow(width int) string {
 		status := glyphs.Bullet + " " + flattenLine(m.status)
 		return clampPlainWidth(successStyle.Render(status), status, width)
 	}
-	if advisory := m.advisory(); advisory != "" {
-		advisory = glyphs.Warn + " " + advisory
-		return clampPlainWidth(warningStyle.Render(advisory), advisory, width)
-	}
 	if len(m.cfg.PendingCleanup) > 0 && m.screen == screenHome {
 		pending := glyphs.Warn + " pending cleanup: " + strings.Join(m.cfg.PendingCleanup, ", ")
 		return clampPlainWidth(warningStyle.Render(pending), pending, width)
 	}
 	return ""
-}
-
-// advisory surfaces host conditions that will make a chosen boundary fail at
-// run time. It never changes the plan; it only tells the truth early.
-func (m model) advisory() string {
-	if m.softnetStatusKnown && !m.softnetIsReady && m.screenTouchesSoftnet() {
-		if m.screen == screenReview || m.screen == screenExecute {
-			return "Set up Softnet before running."
-		}
-		return "Softnet needs setup for these options."
-	}
-	return ""
-}
-
-func (m model) screenTouchesSoftnet() bool {
-	switch m.screen {
-	case screenNetwork, screenLANCIDR, screenLANCIDRText:
-		return true
-	case screenReview, screenExecute:
-		return planRequiresSoftnet(m.plan)
-	default:
-		return false
-	}
 }
 
 // hintRow shows only keys that are useful at this moment. Input modes reveal

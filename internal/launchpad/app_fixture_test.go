@@ -6,10 +6,9 @@ import (
 )
 
 type screenFixture struct {
-	cfg     Config
-	vms     []VM
-	volumes []HostVolume
-	host    fakeHostEnvironment
+	cfg  Config
+	vms  []VM
+	host fakeHostEnvironment
 }
 
 func workspaceRunFixture() screenFixture {
@@ -40,39 +39,12 @@ func templateRunFixture() screenFixture {
 	}
 }
 
-func volumeSelectionFixture() screenFixture {
-	fixture := workspaceRunFixture()
-	fixture.volumes = []HostVolume{{
-		ID:   "disk7s1",
-		Path: "/Volumes/External SSD",
-		Name: "External SSD",
-		Size: 1000204886016,
-	}, {
-		ID:   "disk8s1",
-		Path: "/Volumes/Backup",
-		Name: "Backup",
-		Size: 2000398934016,
-	}}
-	return fixture
-}
-
 func (f screenFixture) model() model {
 	host := f.host
 	if host.currentDirectory == "" {
 		host.currentDirectory = "/tmp/project"
 	}
-	m := newModelWithVolumesAndHost(f.cfg, "", f.vms, f.volumes, host)
-	m.volumeLister = fakeVolumeLister{volumes: f.volumes}
-	return m
-}
-
-type fakeVolumeLister struct {
-	volumes []HostVolume
-	err     error
-}
-
-func (f fakeVolumeLister) ListHostVolumes() ([]HostVolume, error) {
-	return append([]HostVolume(nil), f.volumes...), f.err
+	return newModelWithHost(f.cfg, "", f.vms, host)
 }
 
 type fakeHostEnvironment struct {

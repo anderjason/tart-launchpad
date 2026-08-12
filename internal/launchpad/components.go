@@ -109,13 +109,6 @@ func cursorCellFor(glyphs glyphSet, selected bool) string {
 	return strings.Repeat(" ", lipgloss.Width(glyphs.Cursor)+1)
 }
 
-func checkboxCell(glyphs glyphSet, checked bool) string {
-	if checked {
-		return warningStyle.Render(glyphs.Checked)
-	}
-	return mutedStyle.Render(glyphs.Unchecked)
-}
-
 func sectionHeading(title string) string {
 	return sectionLabelStyle.Render(title)
 }

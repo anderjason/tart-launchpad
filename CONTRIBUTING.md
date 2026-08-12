@@ -33,7 +33,7 @@ Do not submit a generated change that you cannot explain or validate.
 
 ## Security-sensitive changes
 
-Call out changes to command planning, host-folder or volume access, network
+Call out changes to command planning, host-folder access, network
 access, GitHub configuration, dependencies, build scripts, or release behavior.
 These changes receive closer review because they can affect a user's machine or
 the project's supply chain.

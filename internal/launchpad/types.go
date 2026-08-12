@@ -46,13 +46,6 @@ type VM struct {
 	Kind    VMKind
 }
 
-type HostVolume struct {
-	ID   string
-	Path string
-	Name string
-	Size uint64
-}
-
 type CommandStep struct {
 	Kind          CommandStepKind
 	Label         string
@@ -82,7 +75,6 @@ type Plan struct {
 	Title               string
 	Steps               []CommandStep
 	Review              PlanReview
-	Prerequisites       PlanPrerequisites
 	CreatedVM           string
 	TemporaryVM         string
 	HasTemporaryVM      bool
@@ -96,18 +88,12 @@ type Plan struct {
 	Warnings            []string
 }
 
-type PlanPrerequisites struct {
-	Softnet bool
-}
-
 type PlanReview struct {
 	Verb           string
 	ShowBoundaries bool
 	FolderAccess   FolderAccess
 	ProjectPath    string
 	NetworkAccess  NetworkAccess
-	VolumePaths    []string
-	VolumeIDs      map[string]string
 	Clipboard      bool
 	GuestAudio     bool
 }
@@ -115,7 +101,6 @@ type PlanReview struct {
 type HostAccessGrant struct {
 	FolderAccess FolderAccess
 	ProjectPath  string
-	VolumePaths  []string
 	Clipboard    bool
 	GuestAudio   bool
 }
@@ -128,8 +113,6 @@ type RunOptions struct {
 	Clipboard        bool
 	GuestAudio       bool
 	TemplateReadOnly bool
-	VolumePaths      []string
-	VolumeIDs        map[string]string
 }
 
 type NewFromTemplateOptions struct {
@@ -141,8 +124,6 @@ type NewFromTemplateOptions struct {
 	NetworkAccess NetworkAccess
 	Clipboard     bool
 	GuestAudio    bool
-	VolumePaths   []string
-	VolumeIDs     map[string]string
 }
 
 type ExportOptions struct {

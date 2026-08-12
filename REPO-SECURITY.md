@@ -13,7 +13,6 @@ Tart Launchpad is not a sandbox. It is an intent-preserving wrapper that makes V
 The security-sensitive product behavior is command generation:
 
 - folder access is explicit: `no-folder`, `read-folder`, or `edit-folder`, with a separate resolved project path
-- mounted volume access is explicit, unchecked by default, and attached read-write with `--dir=<name>:/Volumes/<name>`
 - network access is explicit: `offline`, `internet`, `host`, `lan`, or `lan-and-internet`
 - clipboard and guest audio are explicit per-run choices and remain off by default
 - templates are guarded from normal read-write runs
@@ -46,9 +45,9 @@ Do not rely on chmod or private Tart state under `~/.tart` for product behavior.
 
 The current working directory is the default project folder. Users may explicitly choose another folder. Resolve symlinks, reject the filesystem root, the user's home root, and known credential roots, and show the resolved path and access mode during review. This validation does not make Launchpad a sandbox.
 
-Do not add raw `--disk` support, chmod, chown, unmount, mount, or otherwise prepare host storage from Launchpad. Launchpad may list mounted non-system volumes and share selected volumes with Tart directory sharing. If mounted-volume tooling fails, fail fast instead of falling back to raw disks, private Tart state, or broader host sharing.
+Do not add raw `--disk` support or otherwise prepare host storage from Launchpad.
 
-Softnet setup is a host administration action, not a Launchpad runtime action. Launchpad may preflight whether the `softnet` helper is root-owned and setuid, but it must not run `sudo`, change helper ownership, or silently switch to a weaker network mode.
+Tart and Softnet own Softnet installation, trust, and privilege requirements. Launchpad passes the reviewed network arguments to Tart and reports Tart's execution error without inspecting or administering the Softnet helper.
 
 ## Local Checks
 

@@ -78,7 +78,7 @@ func helpText() string {
 
 Usage:
   tart-launchpad
-  tart-launchpad plan --vm <name> --folder-access <mode> --network-access <mode> [--project-folder <path>] [--clipboard] [--guest-audio] [--template-read-only] [--volume /Volumes/Name]
+  tart-launchpad plan --vm <name> --folder-access <mode> --network-access <mode> [--project-folder <path>] [--clipboard] [--guest-audio] [--template-read-only]
 
 VM kinds:         template, workspace
   folder access:  no-folder, read-folder, edit-folder

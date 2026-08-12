@@ -109,7 +109,7 @@ func tintedGrantColor(provenance string) lipgloss.TerminalColor {
 	switch provenance {
 	case string(FolderReadFolder):
 		hue = "#7DD3FC"
-	case string(FolderEditFolder), "volume read-write":
+	case string(FolderEditFolder):
 		hue = "#F59E0B"
 	case string(NetworkOffline):
 		hue = "#71717A"
@@ -149,8 +149,6 @@ type glyphSet struct {
 	Arrow       string
 	Up          string
 	Down        string
-	Checked     string
-	Unchecked   string
 	GrantTop    string
 	GrantBottom string
 }
@@ -167,8 +165,6 @@ var unicodeGlyphSet = glyphSet{
 	Arrow:       "▸",
 	Up:          "↑",
 	Down:        "↓",
-	Checked:     "[x]",
-	Unchecked:   "[ ]",
 	GrantTop:    "⎧",
 	GrantBottom: "⎩",
 }
@@ -185,8 +181,6 @@ var asciiGlyphSet = glyphSet{
 	Arrow:       ">",
 	Up:          "^",
 	Down:        "v",
-	Checked:     "[x]",
-	Unchecked:   "[ ]",
 	GrantTop:    "/",
 	GrantBottom: "\\",
 }

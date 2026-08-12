@@ -55,12 +55,6 @@ func ParsePlanArgs(args []string) (RunOptions, error) {
 			options.GuestAudio = true
 		case "--template-read-only":
 			options.TemplateReadOnly = true
-		case "--volume":
-			value, err := next()
-			if err != nil {
-				return RunOptions{}, err
-			}
-			options.VolumePaths = append(options.VolumePaths, value)
 		default:
 			return RunOptions{}, fmt.Errorf("%w: unknown plan option %q", ErrUsage, arg)
 		}
