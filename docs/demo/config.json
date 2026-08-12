@@ -1,0 +1,14 @@
+{
+  "vms": {
+    "base-macos": {
+      "kind": "template"
+    }
+  },
+  "network": {
+    "lan_cidrs": []
+  },
+  "defaults": {
+    "folder_access": "no-folder",
+    "network_access": "offline"
+  }
+}

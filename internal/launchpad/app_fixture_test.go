@@ -49,7 +49,6 @@ func (f screenFixture) model() model {
 
 type fakeHostEnvironment struct {
 	currentDirectory string
-	existingFiles    map[string]bool
 }
 
 func (f fakeHostEnvironment) CurrentDirectory() (string, error) {
@@ -62,8 +61,4 @@ func (f fakeHostEnvironment) ResolveProjectDirectory(path string) (string, error
 		path = f.currentDirectory
 	}
 	return filepath.Clean(path), nil
-}
-
-func (f fakeHostEnvironment) FileExists(path string) (bool, error) {
-	return f.existingFiles[path], nil
 }

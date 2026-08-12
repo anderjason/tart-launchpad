@@ -4,7 +4,7 @@
 
 Tart Launchpad is a personal TUI for running Tart VMs without remembering safety flags. It helps the user choose what a VM may touch, what network it may reach, and whether a VM should be kept or temporary.
 
-It wraps a small, opinionated workflow around `tart list`, `tart clone`, `tart run`, `tart delete`, `tart export`, and `tart import`.
+It wraps a small, opinionated workflow around `tart list`, `tart clone`, `tart run`, `tart rename`, and `tart delete`.
 
 ## Canonical Vocabulary
 
@@ -47,23 +47,14 @@ Run duration:
 - Templates are guarded from normal runs.
 - A template can create a new workspace.
 - A template can create a temporary run that is deleted afterward.
-- A template or workspace can be exported to a user-specified `.tvm` path.
-- A `.tvm` file at a user-specified path can be imported with an explicit destination VM name.
-- Import and export show the exact Tart command before execution.
-- Export refuses to silently overwrite an existing `.tvm` file.
-- Import refuses to silently collide with an existing VM name.
-- Export review warns that `.tvm` files may contain secrets or sensitive local state.
+- A VM can be renamed or assigned the `template` or `workspace` role.
+- Every permanent deletion requires the user to type the VM name.
+- A temporary run receives a collision-safe generated name and does not ask the user to name it.
 - If `lan` or `lan-and-internet` needs a LAN CIDR, the TUI offers detected private IPv4 network CIDRs first and an `other...` free-text option.
 - Config uses the canonical terms above.
 - Launchpad stores no secrets.
 
 ## Command Mapping
-
-Before every Launchpad-shaped run, Launchpad configures the VM:
-
-```text
-set <vm> --cpu 4 --memory 8192 --display 1280x800
-```
 
 Launchpad-shaped runs add these flags when the corresponding connection is off:
 
@@ -96,18 +87,6 @@ Template direct run adds:
 --root-disk-opts=ro
 ```
 
-Export:
-
-```text
-tart export <vm> <destination>.tvm
-```
-
-Import:
-
-```text
-tart import <source>.tvm <vm>
-```
-
 ## Non-Goals
 
 - No full Tart GUI.
@@ -115,5 +94,4 @@ tart import <source>.tvm <vm>
 - No package-manager or guest setup workflows.
 - No hidden `safe` profile.
 - No mutation of Tart private storage under `~/.tart`.
-- No custom VM archive format.
-- No Tart registry push/pull workflow.
+- No VM resource sizing or display configuration.

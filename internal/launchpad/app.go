@@ -6,11 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -56,15 +54,15 @@ const (
 	screenHome screen = iota
 	screenVMAction
 	screenTemplateAction
+	screenTemplatePicker
 	screenRunDuration
 	screenName
 	screenFolder
+	screenFolderAccess
 	screenProjectFolderPath
 	screenNetwork
 	screenLANCIDR
 	screenLANCIDRText
-	screenImportPath
-	screenExportPath
 	screenReview
 	screenExecute
 	screenMessage
@@ -77,8 +75,6 @@ const (
 	flowRunExisting flow = iota
 	flowNewFromTemplate
 	flowRunTemplateReadOnly
-	flowExportVM
-	flowImportArchive
 )
 
 type nameMode int
@@ -86,7 +82,6 @@ type nameMode int
 const (
 	nameModeNewVM nameMode = iota
 	nameModeRenameVM
-	nameModeImportVM
 )
 
 type navigationEntry struct {
@@ -95,8 +90,9 @@ type navigationEntry struct {
 }
 
 type homeItem struct {
-	vm    VM
-	index int
+	action string
+	vm     VM
+	index  int
 }
 
 type vmsLoadedMsg []VM
@@ -135,6 +131,7 @@ type model struct {
 	height      int
 	message     string
 	status      string
+	statusKind  noticeKind
 	needsSave   bool
 	keysOverlay bool
 	mode        inputMode
@@ -142,7 +139,6 @@ type model struct {
 	homeFocusVM string
 	loadingVMs  bool
 	spinner     spinner.Model
-	progress    progress.Model
 	theme       theme
 
 	backStack    []navigationEntry
@@ -166,13 +162,10 @@ type model struct {
 	guestAudio                 bool
 	host                       HostEnvironment
 	tart                       Tart
-	importSourcePath           string
-	importPathCursor           int
-	exportDestinationPath      string
-	exportPathCursor           int
 	plan                       Plan
 	reviewScroll               int
 	deleteConfirmInput         string
+	deleteConfirmCursor        int
 	executeIndex               int
 	executeStates              []executeStepState
 	executeOutput              string
@@ -196,14 +189,12 @@ func newModelWithHost(cfg Config, cfgPath string, vms []VM, host HostEnvironment
 	}
 	appTheme := newTheme(cfg)
 	spin := spinner.New(spinner.WithSpinner(appTheme.spinnerFrames()))
-	bar := progress.New(progress.WithSolidFill("#5FD7D7"), progress.WithoutPercentage())
 	return model{
 		cfg:           cfg,
 		cfgPath:       cfgPath,
 		vms:           vms,
 		host:          host,
 		spinner:       spin,
-		progress:      bar,
 		theme:         appTheme,
 		screen:        screenHome,
 		mode:          modeNormal,
@@ -335,15 +326,20 @@ func (m model) handleKey(key string) (tea.Model, tea.Cmd) {
 		return m.handleVMActionKey(key)
 	case screenTemplateAction:
 		return m.handleTemplateActionKey(key)
+	case screenTemplatePicker:
+		return m.handleTemplatePickerKey(key)
 	case screenRunDuration:
 		return m.handleChoiceKey(key, len(RunDurations), func(m model) model {
 			m.runDuration = RunDurations[m.cursor]
 			if m.runDuration == RunDurationTemporaryRun {
-				m.nameInput = "tmp-" + time.Now().Format("20060102-1504")
-			} else {
-				m.nameInput = ""
+				m.nameInput = m.availableTemporaryName(time.Now())
+				m.nameCursor = runeCount(m.nameInput)
+				m.nameMode = nameModeNewVM
+				m.message = ""
+				return m.goToWithCursor(screenFolder, 0)
 			}
-			m.nameCursor = runeCount(m.nameInput)
+			m.nameInput = ""
+			m.nameCursor = 0
 			m.nameMode = nameModeNewVM
 			m.message = ""
 			return m.goToWithCursor(screenName, 0)
@@ -352,6 +348,11 @@ func (m model) handleKey(key string) (tea.Model, tea.Cmd) {
 		return m.handleNameKey(key)
 	case screenFolder:
 		return m.handleHostConnectionsKey(key)
+	case screenFolderAccess:
+		return m.handleChoiceKey(key, len(FolderAccesses), func(m model) model {
+			m.folderAccess = FolderAccesses[m.cursor]
+			return m.goBack()
+		})
 	case screenProjectFolderPath:
 		return m.handleProjectFolderPathKey(key)
 	case screenNetwork:
@@ -370,10 +371,6 @@ func (m model) handleKey(key string) (tea.Model, tea.Cmd) {
 		return m.handleLANCIDRKey(key)
 	case screenLANCIDRText:
 		return m.handleLANCIDRTextKey(key)
-	case screenImportPath:
-		return m.handleImportPathKey(key)
-	case screenExportPath:
-		return m.handleExportPathKey(key)
 	case screenReview:
 		return m.handleReviewKey(key)
 	case screenExecute:
@@ -416,84 +413,20 @@ func (m model) handleHomeKey(key string) (tea.Model, tea.Cmd) {
 	case "r":
 		m.loadingVMs = true
 		return m, m.loadVMsCmd()
-	case "c":
-		if len(m.cfg.PendingCleanup) == 0 {
-			return m, nil
-		}
-		name := m.cfg.PendingCleanup[0]
-		if m.focusHomeVM(name) {
-			m.status = "verify " + name + " before deleting it; cleanup identity is ambiguous"
-			return m, nil
-		}
-		m.cfg.RemovePendingCleanup(name)
-		m.needsSave = true
-		m.status = "cleanup already complete for " + name
-	case ".":
-		if len(items) == 0 {
-			return m, nil
-		}
-		item := items[m.cursor]
-		last, ok := m.cfg.LastRunFor(item.vm.Name)
-		if !ok {
-			m.status = "no last run for " + item.vm.Name
-			return m, nil
-		}
-		m.selectedVM = item.vm
-		nextFlow := flowRunExisting
-		if item.vm.Kind == VMKindTemplate {
-			nextFlow = flowRunTemplateReadOnly
-		}
-		m = m.beginRunFlow(nextFlow)
-		m.folderAccess = last.FolderAccess
-		m.projectPath = last.ProjectPath
-		m.projectPathInput = last.ProjectPath
-		m.projectPathCursor = runeCount(last.ProjectPath)
-		m.networkAccess = last.NetworkAccess
-		m.clipboard = last.Clipboard
-		m.guestAudio = last.GuestAudio
-		if err := m.preparePlan(); err != nil {
-			return m.showMessage(err.Error(), screenHome), nil
-		}
-		m = m.goToWithCursor(screenReview, 0)
-	case "m":
-		if len(items) == 0 {
-			return m, nil
-		}
-		item := items[m.cursor]
-		vm := item.vm
-		next := nextKind(vm.Kind)
-		m.cfg.SetKind(vm.Name, next)
-		m.vms[item.index].Kind = next
-		m.needsSave = true
-		m.status = fmt.Sprintf("%s -> %s", vm.Name, next)
 	case "n":
-		templates := m.templates()
-		if len(templates) == 0 {
-			return m.showMessage("Mark a VM as template first with m.", screenHome), nil
-		}
-		selected := VM{}
-		if len(items) > 0 && items[m.cursor].vm.Kind == VMKindTemplate {
-			selected = items[m.cursor].vm
-		} else if len(templates) == 1 {
-			selected = templates[0]
-		} else {
-			m.status = "select a template before creating a VM"
-			return m, nil
-		}
-		m = m.beginRunFlow(flowNewFromTemplate)
-		m.selectedTemplate = selected
-		m = m.goToWithCursor(screenRunDuration, 0)
-	case "i":
-		m.flow = flowImportArchive
-		m.importSourcePath = ""
-		m.importPathCursor = 0
-		m.message = ""
-		m = m.goToWithCursor(screenImportPath, 0)
-	case "enter", "l", "right":
+		return m.beginNewVM()
+	case "enter":
 		if len(items) == 0 {
 			return m, nil
 		}
-		vm := items[m.cursor].vm
+		item := items[m.cursor]
+		switch item.action {
+		case "new":
+			return m.beginNewVM()
+		case "cleanup":
+			return m.cleanUpPendingVM()
+		}
+		vm := item.vm
 		m.selectedVM = vm
 		if vm.Kind == VMKindTemplate {
 			m = m.goToWithCursor(screenTemplateAction, 0)
@@ -504,7 +437,44 @@ func (m model) handleHomeKey(key string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleHomeFilterKey runs while FILTER mode owns the keyboard: every
+func (m model) beginNewVM() (tea.Model, tea.Cmd) {
+	templates := m.templates()
+	if len(templates) == 0 {
+		return m.showMessage("No templates are available. Open a VM, choose Change role, then choose Template.", screenHome), nil
+	}
+	m = m.beginRunFlow(flowNewFromTemplate)
+	if len(templates) == 1 {
+		m.selectedTemplate = templates[0]
+		return m.goToWithCursor(screenRunDuration, 0), nil
+	}
+	cursor := 0
+	for i, template := range templates {
+		if template.Name == m.selectedVM.Name {
+			cursor = i
+			break
+		}
+	}
+	return m.goToWithCursor(screenTemplatePicker, cursor), nil
+}
+
+func (m model) cleanUpPendingVM() (tea.Model, tea.Cmd) {
+	if len(m.cfg.PendingCleanup) == 0 {
+		return m, nil
+	}
+	name := m.cfg.PendingCleanup[0]
+	if m.focusHomeVM(name) {
+		m.status = "Verify " + name + " before deleting it; its cleanup identity is ambiguous"
+		m.statusKind = noticeAttention
+		return m, nil
+	}
+	m.cfg.RemovePendingCleanup(name)
+	m.needsSave = true
+	m.status = "Cleanup already complete for " + name
+	m.statusKind = noticeSuccess
+	return m, nil
+}
+
+// handleHomeFilterKey runs while the filter owns the keyboard: every
 // printable rune narrows the fleet list instead of triggering an action.
 func (m model) handleHomeFilterKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
@@ -529,25 +499,22 @@ func (m model) handleHomeFilterKey(key string) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleVMActionKey(key string) (tea.Model, tea.Cmd) {
-	m.cursor = clampCursor(m.cursor, len(vmActions()))
-	if cursor, handled := navigateList(m.cursor, len(vmActions()), key); handled {
+	rows := m.vmActionRows()
+	m.cursor = clampCursor(m.cursor, len(rows))
+	if cursor, handled := navigateList(m.cursor, len(rows), key); handled {
 		m.cursor = cursor
 		return m, nil
 	}
 	switch key {
-	case "esc", "backspace", "h", "left":
+	case "esc":
 		m = m.goBack()
-	case "enter", "l", "right":
-		switch vmActions()[m.cursor] {
+	case "enter":
+		switch rows[m.cursor].ID {
 		case "run":
 			m = m.beginRunFlow(flowRunExisting)
-			m = m.goToWithCursor(screenFolder, indexFolder(m.folderAccess))
-		case "export":
-			m.flow = flowExportVM
-			m.exportDestinationPath = ""
-			m.exportPathCursor = 0
-			m.message = ""
-			m = m.goToWithCursor(screenExportPath, 0)
+			m = m.goToWithCursor(screenFolder, 0)
+		case "run-again":
+			return m.repeatSelectedVMRun()
 		case "rename":
 			m.nameMode = nameModeRenameVM
 			m.nameInput = m.selectedVM.Name
@@ -559,7 +526,7 @@ func (m model) handleVMActionKey(key string) (tea.Model, tea.Cmd) {
 				return m.showMessage(err.Error(), screenVMAction), nil
 			}
 			m = m.goToWithCursor(screenReview, 0)
-		case "mark kind":
+		case "change-role":
 			m = m.goToWithCursor(screenMarkKind, indexVMKind(m.selectedVM.Kind))
 		}
 	}
@@ -567,26 +534,27 @@ func (m model) handleVMActionKey(key string) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleTemplateActionKey(key string) (tea.Model, tea.Cmd) {
-	m.cursor = clampCursor(m.cursor, len(templateActions()))
-	if cursor, handled := navigateList(m.cursor, len(templateActions()), key); handled {
+	rows := m.templateActionRows()
+	m.cursor = clampCursor(m.cursor, len(rows))
+	if cursor, handled := navigateList(m.cursor, len(rows), key); handled {
 		m.cursor = cursor
 		return m, nil
 	}
 	switch key {
-	case "esc", "backspace", "h", "left":
+	case "esc":
 		m = m.goBack()
-	case "enter", "l", "right":
-		switch templateActions()[m.cursor] {
-		case "new temporary run":
+	case "enter":
+		switch rows[m.cursor].ID {
+		case "new-temporary":
 			m = m.beginRunFlow(flowNewFromTemplate)
 			m.selectedTemplate = m.selectedVM
 			m.runDuration = RunDurationTemporaryRun
 			m.nameMode = nameModeNewVM
-			m.nameInput = "tmp-" + time.Now().Format("20060102-1504")
+			m.nameInput = m.availableTemporaryName(time.Now())
 			m.nameCursor = runeCount(m.nameInput)
 			m.message = ""
-			m = m.goToWithCursor(screenName, 0)
-		case "new workspace":
+			m = m.goToWithCursor(screenFolder, 0)
+		case "new-workspace":
 			m = m.beginRunFlow(flowNewFromTemplate)
 			m.selectedTemplate = m.selectedVM
 			m.runDuration = RunDurationWorkspace
@@ -595,15 +563,11 @@ func (m model) handleTemplateActionKey(key string) (tea.Model, tea.Cmd) {
 			m.nameCursor = 0
 			m.message = ""
 			m = m.goToWithCursor(screenName, 0)
-		case "run read-only":
+		case "run-template":
 			m = m.beginRunFlow(flowRunTemplateReadOnly)
-			m = m.goToWithCursor(screenFolder, indexFolder(m.folderAccess))
-		case "export":
-			m.flow = flowExportVM
-			m.exportDestinationPath = ""
-			m.exportPathCursor = 0
-			m.message = ""
-			m = m.goToWithCursor(screenExportPath, 0)
+			m = m.goToWithCursor(screenFolder, 0)
+		case "run-again":
+			return m.repeatSelectedVMRun()
 		case "rename":
 			m.nameMode = nameModeRenameVM
 			m.nameInput = m.selectedVM.Name
@@ -615,11 +579,44 @@ func (m model) handleTemplateActionKey(key string) (tea.Model, tea.Cmd) {
 				return m.showMessage(err.Error(), screenTemplateAction), nil
 			}
 			m = m.goToWithCursor(screenReview, 0)
-		case "mark kind":
+		case "change-role":
 			m = m.goToWithCursor(screenMarkKind, indexVMKind(m.selectedVM.Kind))
 		}
 	}
 	return m, nil
+}
+
+func (m model) handleTemplatePickerKey(key string) (tea.Model, tea.Cmd) {
+	templates := m.templates()
+	return m.handleChoiceKey(key, len(templates), func(m model) model {
+		m.selectedTemplate = templates[m.cursor]
+		return m.goToWithCursor(screenRunDuration, 0)
+	})
+}
+
+func (m model) repeatSelectedVMRun() (tea.Model, tea.Cmd) {
+	last, ok := m.cfg.LastRunFor(m.selectedVM.Name)
+	if !ok {
+		m.status = "No previous run for " + m.selectedVM.Name
+		m.statusKind = noticeNeutral
+		return m, nil
+	}
+	nextFlow := flowRunExisting
+	if m.selectedVM.Kind == VMKindTemplate {
+		nextFlow = flowRunTemplateReadOnly
+	}
+	m = m.beginRunFlow(nextFlow)
+	m.folderAccess = last.FolderAccess
+	m.projectPath = last.ProjectPath
+	m.projectPathInput = last.ProjectPath
+	m.projectPathCursor = runeCount(last.ProjectPath)
+	m.networkAccess = last.NetworkAccess
+	m.clipboard = last.Clipboard
+	m.guestAudio = last.GuestAudio
+	if err := m.preparePlan(); err != nil {
+		return m.showMessage(err.Error(), m.screen), nil
+	}
+	return m.goToWithCursor(screenReview, 0), nil
 }
 
 func (m model) handleChoiceKey(key string, count int, selectFn func(model) model) (tea.Model, tea.Cmd) {
@@ -629,39 +626,42 @@ func (m model) handleChoiceKey(key string, count int, selectFn func(model) model
 		return m, nil
 	}
 	switch key {
-	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
-		index := int(key[0] - '1')
-		if index >= 0 && index < count {
-			m.cursor = index
-			m = selectFn(m)
-		}
-	case "enter", "l", "right":
+	case "enter":
 		m = selectFn(m)
-	case "esc", "backspace", "h", "left":
+	case "esc":
 		m = m.goBack()
 	}
 	return m, nil
 }
 
 func (m model) handleHostConnectionsKey(key string) (tea.Model, tea.Cmd) {
-	switch key {
-	case "c":
-		m.clipboard = !m.clipboard
-		return m, nil
-	case "a":
-		m.guestAudio = !m.guestAudio
-		return m, nil
-	case "p":
-		m.projectPathInput = m.selectedProjectPath()
-		m.projectPathCursor = runeCount(m.projectPathInput)
-		m.message = ""
-		m = m.goToWithCursor(screenProjectFolderPath, 0)
+	const connectionRows = 5
+	m.cursor = clampCursor(m.cursor, connectionRows)
+	if cursor, handled := navigateList(m.cursor, connectionRows, key); handled {
+		m.cursor = cursor
 		return m, nil
 	}
-	return m.handleChoiceKey(key, len(FolderAccesses), func(m model) model {
-		m.folderAccess = FolderAccesses[m.cursor]
-		return m.goToWithCursor(screenNetwork, indexNetwork(m.networkAccess))
-	})
+	switch key {
+	case "enter":
+		switch m.cursor {
+		case 0:
+			m = m.goToWithCursor(screenFolderAccess, indexFolder(m.folderAccess))
+		case 1:
+			m.projectPathInput = m.selectedProjectPath()
+			m.projectPathCursor = runeCount(m.projectPathInput)
+			m.message = ""
+			m = m.goToWithCursor(screenProjectFolderPath, 0)
+		case 2:
+			m.clipboard = !m.clipboard
+		case 3:
+			m.guestAudio = !m.guestAudio
+		case 4:
+			m = m.goToWithCursor(screenNetwork, indexNetwork(m.networkAccess))
+		}
+	case "esc":
+		m = m.goBack()
+	}
+	return m, nil
 }
 
 func (m model) handleProjectFolderPathKey(key string) (tea.Model, tea.Cmd) {
@@ -691,7 +691,7 @@ func (m model) handleProjectFolderPathKey(key string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleNameKey runs in INSERT mode: enter commits, esc leaves, and every
+// handleNameKey runs while the field owns the keyboard: enter commits, esc leaves, and every
 // other printable key is part of the VM name.
 func (m model) handleNameKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
@@ -708,16 +708,9 @@ func (m model) handleNameKey(key string) (tea.Model, tea.Cmd) {
 			}
 			m.message = ""
 			m = m.goToWithCursor(screenReview, 0)
-		case nameModeImportVM:
-			if err := m.prepareImportPlan(); err != nil {
-				m.message = err.Error()
-				return m, nil
-			}
-			m.message = ""
-			m = m.goToWithCursor(screenReview, 0)
 		default:
 			m.message = ""
-			m = m.goToWithCursor(screenFolder, indexFolder(m.folderAccess))
+			m = m.goToWithCursor(screenFolder, 0)
 		}
 		return m, nil
 	case "esc":
@@ -733,70 +726,6 @@ func (m model) handleNameKey(key string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) handleImportPathKey(key string) (tea.Model, tea.Cmd) {
-	switch key {
-	case "enter":
-		path := strings.TrimSpace(m.importSourcePath)
-		if path == "" {
-			m.message = "Path is required."
-			return m, nil
-		}
-		if filepath.Ext(path) != vmArchiveExtension {
-			m.message = "Import path must end in .tvm."
-			return m, nil
-		}
-		m.importSourcePath = path
-		m.nameMode = nameModeImportVM
-		m.nameInput = strings.TrimSuffix(filepath.Base(path), vmArchiveExtension)
-		m.nameCursor = runeCount(m.nameInput)
-		m.message = ""
-		m = m.goToWithCursor(screenName, 0)
-	case "esc":
-		m = m.goBack()
-		return m, nil
-	}
-	value, cursor, handled := editTextField(m.importSourcePath, m.importPathCursor, key, anyPrintableRune)
-	if handled {
-		m.importSourcePath = value
-		m.importPathCursor = cursor
-		m.message = ""
-	}
-	return m, nil
-}
-
-func (m model) handleExportPathKey(key string) (tea.Model, tea.Cmd) {
-	switch key {
-	case "enter":
-		path := strings.TrimSpace(m.exportDestinationPath)
-		if path == "" {
-			m.message = "Path is required."
-			return m, nil
-		}
-		if filepath.Ext(path) != vmArchiveExtension {
-			m.message = "Export path must end in .tvm."
-			return m, nil
-		}
-		m.exportDestinationPath = path
-		if err := m.prepareExportPlan(); err != nil {
-			m.message = err.Error()
-			return m, nil
-		}
-		m.message = ""
-		m = m.goToWithCursor(screenReview, 0)
-		return m, nil
-	case "esc":
-		m = m.goBack()
-		return m, nil
-	}
-	value, cursor, handled := editTextField(m.exportDestinationPath, m.exportPathCursor, key, anyPrintableRune)
-	if handled {
-		m.exportDestinationPath = value
-		m.exportPathCursor = cursor
-		m.message = ""
-	}
-	return m, nil
-}
-
 func (m model) handleLANCIDRKey(key string) (tea.Model, tea.Cmd) {
 	if len(m.lanCIDRChoices) == 0 {
 		m.lanCIDRChoices = defaultLANCIDRChoices()
@@ -807,13 +736,7 @@ func (m model) handleLANCIDRKey(key string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch key {
-	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
-		index := int(key[0] - '1')
-		if index >= 0 && index < len(m.lanCIDRChoices) {
-			m.cursor = index
-			return m.handleLANCIDRKey("enter")
-		}
-	case "enter", "l", "right":
+	case "enter":
 		choice := m.lanCIDRChoices[m.cursor]
 		if choice.FreeText {
 			m.lanInput = ""
@@ -823,7 +746,7 @@ func (m model) handleLANCIDRKey(key string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.addLANCIDRAndReview(choice.CIDR)
-	case "esc", "backspace", "h", "left":
+	case "esc":
 		m = m.goBack()
 	}
 	return m, nil
@@ -874,17 +797,12 @@ func (m model) handleMarkKindKey(key string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch key {
-	case "1", "2":
-		index := int(key[0] - '1')
-		if index >= 0 && index < len(kinds) {
-			m.cursor = index
-			return m.handleMarkKindKey("enter")
-		}
-	case "enter", "l", "right":
+	case "enter":
 		m = m.setSelectedVMKind(kinds[m.cursor])
-		m.status = fmt.Sprintf("%s -> %s", m.selectedVM.Name, kinds[m.cursor])
+		m.status = fmt.Sprintf("%s is now a %s", m.selectedVM.Name, reviewVMKind(kinds[m.cursor]))
+		m.statusKind = noticeSuccess
 		m = m.returnHomeToVM(m.selectedVM.Name)
-	case "esc", "backspace", "h", "left":
+	case "esc":
 		m = m.goBack()
 	}
 	return m, nil
@@ -905,19 +823,13 @@ func (m model) handleReviewKey(key string) (tea.Model, tea.Cmd) {
 		if m.reviewScroll < m.reviewMaxScroll() {
 			m.reviewScroll++
 		}
-	case "g":
-		m.reviewScroll = 0
 	case "c":
-		m.status = "command copied"
+		m.status = "Command copied"
+		m.statusKind = noticeNeutral
 		return m, copyTextCommand(planCommands(m.plan))
 	case "enter":
-		if m.planRequiresExplicitYes() {
-			return m, nil
-		}
 		return m.confirmReview()
-	case "y":
-		return m.beginExecution()
-	case "esc", "n", "backspace", "h", "left":
+	case "esc":
 		m = m.goBack()
 	}
 	return m, nil
@@ -936,9 +848,10 @@ func (m model) handleReviewConfirmKey(key string) (tea.Model, tea.Cmd) {
 	}
 	// No shortcut steals a printable key here: every VM name character has to
 	// be typeable, including c, y, and n.
-	value, _, handled := editTextField(m.deleteConfirmInput, runeCount(m.deleteConfirmInput), key, anyPrintableRune)
+	value, cursor, handled := editTextField(m.deleteConfirmInput, m.deleteConfirmCursor, key, anyPrintableRune)
 	if handled {
 		m.deleteConfirmInput = value
+		m.deleteConfirmCursor = cursor
 	}
 	return m, nil
 }
@@ -1057,11 +970,6 @@ func (m model) handleExecuteStepFinished(msg executeStepFinishedMsg) (tea.Model,
 		m.executeStates[msg.index] = executeStepFailed
 		m.markSkippedAfter(msg.index)
 		err := fmt.Errorf("%s: %w", step.Label, msg.err)
-		if step.Kind == CommandStepExport {
-			if cleanupErr := discardExportTemporary(m.plan.ExportTemporaryPath); cleanupErr != nil {
-				err = errors.Join(err, cleanupErr)
-			}
-		}
 		if cleanupErr := m.recordPendingCleanupAfterFailure(); cleanupErr != nil {
 			err = errors.Join(err, cleanupErr)
 		}
@@ -1114,11 +1022,6 @@ func (m *model) prepareStepExecution(step CommandStep) error {
 		}
 		m.temporaryVMCreationStarted = true
 	}
-	if step.Kind == CommandStepExport {
-		if err := reserveExportTemporary(m.plan.ExportTemporaryPath, m.plan.ExportPath); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
@@ -1128,11 +1031,6 @@ func (m *model) applySuccessfulStepEffects(step CommandStep) error {
 		m.temporaryVMCreationStarted = false
 		if err := SaveConfig(m.cfgPath, m.cfg); err != nil {
 			return fmt.Errorf("save completed temporary cleanup: %w", err)
-		}
-	}
-	if step.Kind == CommandStepExport {
-		if err := installExportTemporary(m.plan.ExportTemporaryPath, m.plan.ExportPath); err != nil {
-			return err
 		}
 	}
 	return nil
@@ -1190,12 +1088,6 @@ func (m model) markSkippedAfter(index int) {
 }
 
 func (m model) completedExecutionSummary() string {
-	if m.plan.ExportPath != "" {
-		return "Exported " + m.plan.ExportPath
-	}
-	if m.plan.ImportVMName != "" {
-		return "Imported " + m.plan.ImportVMName
-	}
 	if m.plan.DeleteVM != "" {
 		return "Deleted " + m.plan.DeleteVM
 	}
@@ -1203,17 +1095,17 @@ func (m model) completedExecutionSummary() string {
 		return "Renamed " + m.plan.RenameTo
 	}
 	if m.plan.HasTemporaryVM {
-		return fmt.Sprintf("Ran %s · temporary VM deleted · %d steps ✓", m.plan.TemporaryVM, len(m.plan.Steps))
+		return "Temporary run finished; " + m.plan.TemporaryVM + " deleted"
 	}
-	return fmt.Sprintf("%s · %d steps ✓", m.plan.Title, len(m.plan.Steps))
+	if m.plan.CreatedVM != "" {
+		return "Created and ran " + m.plan.CreatedVM
+	}
+	return "Ran " + m.executionReturnName()
 }
 
 func (m model) executionReturnName() string {
 	if m.plan.RenameTo != "" {
 		return m.plan.RenameTo
-	}
-	if m.plan.ImportVMName != "" {
-		return m.plan.ImportVMName
 	}
 	if m.plan.DeleteVM != "" {
 		return ""
@@ -1241,7 +1133,6 @@ func (m model) launchpadIntent() LaunchpadIntent {
 		NetworkAccess: m.networkAccess,
 		Clipboard:     m.clipboard,
 		GuestAudio:    m.guestAudio,
-		ExistingVMs:   m.vms,
 	}
 	switch m.flow {
 	case flowRunExisting:
@@ -1270,31 +1161,12 @@ func (m *model) prepareRenamePlan() error {
 }
 
 func (m *model) prepareDeletePlan() error {
+	m.deleteConfirmInput = ""
+	m.deleteConfirmCursor = 0
 	var err error
 	m.plan, err = LaunchpadIntent{
 		Kind: IntentDeleteVM,
 		VM:   m.selectedVM,
-	}.BuildPlan(m.cfg, m.host)
-	return err
-}
-
-func (m *model) prepareExportPlan() error {
-	var err error
-	m.plan, err = LaunchpadIntent{
-		Kind:                  IntentExportVM,
-		VM:                    m.selectedVM,
-		ExportDestinationPath: m.exportDestinationPath,
-	}.BuildPlan(m.cfg, m.host)
-	return err
-}
-
-func (m *model) prepareImportPlan() error {
-	var err error
-	m.plan, err = LaunchpadIntent{
-		Kind:             IntentImportArchive,
-		ImportSourcePath: m.importSourcePath,
-		NameInput:        m.nameInput,
-		ExistingVMs:      m.vms,
 	}.BuildPlan(m.cfg, m.host)
 	return err
 }
@@ -1318,12 +1190,16 @@ func (m model) render() string {
 		return m.renderVMAction()
 	case screenTemplateAction:
 		return m.renderTemplateAction()
+	case screenTemplatePicker:
+		return m.renderTemplatePicker()
 	case screenRunDuration:
 		return m.renderRunDuration()
 	case screenName:
 		return m.renderName()
 	case screenFolder:
 		return m.renderFolder()
+	case screenFolderAccess:
+		return m.renderFolderAccess()
 	case screenProjectFolderPath:
 		return m.renderProjectFolderPath()
 	case screenNetwork:
@@ -1332,10 +1208,6 @@ func (m model) render() string {
 		return m.renderLANCIDR()
 	case screenLANCIDRText:
 		return m.renderLANCIDRText()
-	case screenImportPath:
-		return m.renderImportPath()
-	case screenExportPath:
-		return m.renderExportPath()
 	case screenReview:
 		return m.renderReview()
 	case screenExecute:
@@ -1365,13 +1237,27 @@ func (m model) renderHome() string {
 		lines = append(lines, mutedStyle.Render(glyphs.Up+" more"))
 	}
 	for i := start; i < end; i++ {
+		item := items[i]
+		if i == m.firstActionIndex(items) {
+			lines = append(lines, sectionHeading("Actions"))
+		}
+		if i == m.firstWorkspaceIndex(items) {
+			if len(lines) > 0 {
+				lines = append(lines, "")
+			}
+			lines = append(lines, sectionHeading("Workspaces"))
+		}
 		if i == m.firstTemplateIndex(items) {
 			if len(lines) > 0 {
 				lines = append(lines, "")
 			}
-			lines = append(lines, sectionHeading("TEMPLATES"))
+			lines = append(lines, templateStyle.Render("Templates"))
 		}
-		lines = append(lines, m.renderHomeRow(glyphs, items[i].vm, i == cursorIndex, nameWidth))
+		if item.action != "" {
+			lines = append(lines, m.renderHomeActionRows(glyphs, item.action, i == cursorIndex)...)
+			continue
+		}
+		lines = append(lines, m.renderHomeRow(glyphs, item.vm, i == cursorIndex, nameWidth))
 	}
 	if end < len(items) {
 		lines = append(lines, mutedStyle.Render(glyphs.Down+" more"))
@@ -1382,17 +1268,27 @@ func (m model) renderHome() string {
 	case len(m.vms) == 0:
 		lines = append(lines,
 			textStyle.Render("No local Tart VMs found."),
-			mutedStyle.Render("i imports a .tvm from Desktop · or create one with tart"))
+			mutedStyle.Render("Create one with Tart, then refresh this list."))
 	case len(items) == 0:
 		lines = append(lines, mutedStyle.Render("No VMs match the filter."))
 	}
 
 	return m.renderFrame(framePage{
 		Trail: []string{"VMs"},
-		Step:  m.homeCount(len(items)),
+		Step:  m.homeCount(m.visibleVMCount(items)),
 		Body:  strings.Join(lines, "\n"),
 		Hints: m.homeHints(),
 	})
+}
+
+func (m model) renderHomeActionRows(glyphs glyphSet, action string, selected bool) []string {
+	label := "New VM"
+	description := "Create from a template"
+	if action == "cleanup" {
+		label = "Clean up temporary VM"
+		description = "Resolve " + m.cfg.PendingCleanup[0]
+	}
+	return actionRows(glyphs, actionRow{Label: label, Description: description}, selected, m.mainPaneWidth())
 }
 
 func (m model) renderHomeRow(glyphs glyphSet, vm VM, selected bool, nameWidth int) string {
@@ -1407,7 +1303,7 @@ func (m model) renderHomeRow(glyphs glyphSet, vm VM, selected bool, nameWidth in
 	return strings.Join([]string{cursorCellFor(glyphs, selected) + running, name, mutedStyle.Render(vm.State)}, " ")
 }
 
-// renderFilterRow shows the live query while FILTER mode owns the keyboard.
+// renderFilterRow shows the live query while the filter owns the keyboard.
 func (m model) renderFilterRow() string {
 	if m.mode != modeFilter {
 		return mutedStyle.Render("filter ") + textStyle.Render(m.homeFilter) + mutedStyle.Render("  esc clears")
@@ -1423,15 +1319,15 @@ func (m model) homeCount(shown int) string {
 }
 
 func (m model) renderMessage() string {
-	body := strings.Join(append(
-		[]string{sectionHeading("LAUNCHPAD STOPPED HERE"), ""},
-		wrapPlain(m.message, m.mainPaneWidth())...,
-	), "\n")
+	lines := []string{dangerStyle.Render(m.glyphs().Failed + " Couldn't continue"), ""}
+	for _, line := range wrapPlain(m.message, m.mainPaneWidth()) {
+		lines = append(lines, textStyle.Render(line))
+	}
 	return m.renderFrame(framePage{
-		Trail:  append(m.flowTrail(), "error"),
-		Body:   dangerStyle.Render(body),
+		Trail:  append(m.flowTrail(), "Error"),
+		Body:   strings.Join(lines, "\n"),
 		Danger: true,
-		Hints:  []string{"enter back"},
+		Hints:  []string{"enter back", "esc back"},
 	})
 }
 
@@ -1456,197 +1352,127 @@ func (m model) renderKeysOverlay() string {
 }
 
 func (m model) renderTemplateAction() string {
-	intro := []string{
-		textStyle.Render(m.selectedVM.Name + " is a template."),
-		mutedStyle.Render("Templates stay clean: run them read-only, or create a VM from them."),
-	}
 	return m.renderFrame(framePage{
-		Trail: []string{"VMs", m.selectedVM.Name, "actions"},
-		Body:  actionListBody(m.glyphs(), intro, templateActionRows(), m.cursor),
+		Trail: []string{"VMs", m.selectedVM.Name},
+		Body:  actionListBody(m.glyphs(), "What would you like to do with "+m.selectedVM.Name+"?", m.templateActionRows(), m.cursor, m.mainPaneWidth()),
 		Hints: listHints(),
 	})
 }
 
 func (m model) renderVMAction() string {
-	intro := []string{textStyle.Render(m.selectedVM.Name)}
-	if m.selectedVM.Running {
-		intro = append(intro, warningStyle.Render("This VM is already running."))
+	question := "What would you like to do with " + m.selectedVM.Name + "?"
+	return m.renderFrame(framePage{
+		Trail: []string{"VMs", m.selectedVM.Name},
+		Body:  actionListBody(m.glyphs(), question, m.vmActionRows(), m.cursor, m.mainPaneWidth()),
+		Hints: listHints(),
+	})
+}
+
+func (m model) renderTemplatePicker() string {
+	templates := m.templates()
+	choices := make([]accessChoice, 0, len(templates))
+	for _, template := range templates {
+		choices = append(choices, accessChoice{Label: template.Name, Description: "Protected source"})
 	}
 	return m.renderFrame(framePage{
-		Trail: []string{"VMs", m.selectedVM.Name, "actions"},
-		Body:  actionListBody(m.glyphs(), intro, vmActionRows(m.selectedVM), m.cursor),
+		Trail: []string{"VMs", "New VM", "Template"},
+		Body:  choiceListBody(m.glyphs(), "Which template should the new VM use?", choices, m.cursor, m.mainPaneWidth()),
 		Hints: listHints(),
 	})
 }
 
 func (m model) renderRunDuration() string {
 	return m.renderFrame(framePage{
-		Trail: append(m.flowTrail(), "duration"),
-		Step:  m.stepIndicator(),
-		Body:  choiceListBody(m.glyphs(), "How long should this VM live?", runDurationChoices(), m.cursor),
+		Trail: append(m.flowTrail(), "Duration"),
+		Body:  choiceListBody(m.glyphs(), "What should happen after this VM runs?", runDurationChoices(), m.cursor, m.mainPaneWidth()),
 		Hints: listHints(),
 	})
 }
 
 func (m model) renderName() string {
-	crumb := "name"
-	context := []string{textStyle.Render("Name the new VM.")}
+	crumb := "Name"
+	question := "What should the new workspace be called?"
 	switch m.nameMode {
 	case nameModeRenameVM:
-		crumb = "rename"
-		context = []string{
-			textStyle.Render("Rename " + m.selectedVM.Name + "."),
-			mutedStyle.Render("Launchpad keeps the VM kind and last run with the new name."),
-		}
-	case nameModeImportVM:
-		crumb = "name"
-		context = []string{
-			textStyle.Render("Name the imported VM."),
-			mutedStyle.Render("from " + truncateLeft(m.importSourcePath, max(24, m.mainPaneWidth()-6))),
-		}
+		crumb = "Rename"
+		question = "What should " + m.selectedVM.Name + " be called?"
 	}
 	return m.renderFrame(framePage{
 		Trail: append(m.flowTrail(), crumb),
-		Step:  m.stepIndicator(),
-		Body:  promptBody("VM NAME", m.nameInput, m.nameCursor, context, "allowed: a-z A-Z 0-9 - _ ."),
+		Body:  promptBody(question, m.nameInput, m.nameCursor, "Letters, numbers, hyphens, underscores, and periods.", m.message),
 		Hints: promptHints(),
 	})
 }
 
 func (m model) renderFolder() string {
-	choices := folderAccessChoices()
-	cursor := clampCursor(m.cursor, len(choices))
-	glyphs := m.glyphs()
-	lines := []string{
-		textStyle.Render("What host connections should " + m.flowTargetName() + " receive?"),
-		"",
-		sectionHeading("PROJECT FOLDER"),
-		"",
+	rows := []actionRow{
+		{Label: "Folder access", Description: reviewFolderAccess(m.folderAccess), Attention: m.folderAccess == FolderEditFolder},
+		{Label: "Project folder", Description: truncateLeft(m.selectedProjectPath(), max(24, m.mainPaneWidth()-34)), Attention: m.folderAccess != FolderNoFolder},
+		{Label: "Clipboard", Description: connectionLabel(m.clipboard, "Shared with VM"), Attention: m.clipboard},
+		{Label: "Audio", Description: connectionLabel(m.guestAudio, "Plays on this Mac"), Attention: m.guestAudio},
+		{Label: "Continue", Description: "Choose network access next"},
 	}
-	for i, choice := range choices {
-		label := fixedDisplayWidth(choice.Label, 18)
-		description := mutedStyle.Render(choice.Description)
-		if i == cursor {
-			label = selectedStyle.Render(label)
-			description = textStyle.Render(choice.Description)
-		}
-		lines = append(lines, cursorCellFor(glyphs, i == cursor)+label+" "+description)
-	}
-	lines = append(lines,
-		"",
-		boundaryLine("path", truncateLeft(m.selectedProjectPath(), max(24, m.mainPaneWidth()-18))),
-		boundaryLine("clipboard", connectionToggleValue(m.clipboard, "host and guest clipboard contents can cross the boundary")),
-		boundaryLine("guest audio", connectionToggleValue(m.guestAudio, "guest audio plays through the host")),
-	)
 	return m.renderFrame(framePage{
-		Trail: append(m.flowTrail(), "host connections"),
-		Step:  m.stepIndicator(),
-		Body:  strings.Join(lines, "\n"),
-		Hints: []string{"1-3 choose folder access", "p choose folder", "c clipboard", "a guest audio", "enter continue", "esc back"},
+		Trail: append(m.flowTrail(), "Connections"),
+		Body:  actionListBody(m.glyphs(), "How may "+m.flowTargetName()+" connect to this Mac?", rows, m.cursor, m.mainPaneWidth()),
+		Hints: listHints(),
+	})
+}
+
+func (m model) renderFolderAccess() string {
+	return m.renderFrame(framePage{
+		Trail: append(m.flowTrail(), "Connections", "Folder access"),
+		Body:  choiceListBody(m.glyphs(), "What may the VM do with the project folder?", folderAccessChoices(), m.cursor, m.mainPaneWidth()),
+		Hints: listHints(),
 	})
 }
 
 func (m model) renderProjectFolderPath() string {
-	context := []string{
-		textStyle.Render("Choose the one host project folder this VM may access."),
-		mutedStyle.Render("Launchpad resolves symlinks and rejects broad or credential-bearing roots."),
-	}
 	return m.renderFrame(framePage{
-		Trail: append(m.flowTrail(), "host connections", "project folder"),
-		Step:  m.stepIndicator(),
-		Body:  promptBody("PROJECT FOLDER", m.projectPathInput, m.projectPathCursor, context, "absolute path or ~/path"),
+		Trail: append(m.flowTrail(), "Connections", "Project folder"),
+		Body:  promptBody("Which project folder may the VM access?", m.projectPathInput, m.projectPathCursor, "Absolute path or ~/path. Broad and credential-bearing roots are rejected.", m.message),
 		Hints: promptHints(),
 	})
 }
 
-func connectionToggleValue(enabled bool, consequence string) string {
+func connectionLabel(enabled bool, consequence string) string {
 	if !enabled {
-		return mutedStyle.Render("off")
+		return "Off"
 	}
-	return warningStyle.Render("on") + "  " + textStyle.Render(consequence)
+	return consequence
 }
 
 func (m model) renderNetwork() string {
 	choices := networkAccessChoices(m.cfg)
 	cursor := clampCursor(m.cursor, len(choices))
 	return m.renderFrame(framePage{
-		Trail: append(m.flowTrail(), "network"),
-		Step:  m.stepIndicator(),
-		Body:  choiceListBody(m.glyphs(), "What network access should "+m.flowTargetName()+" receive?", choices, cursor),
+		Trail: append(m.flowTrail(), "Network"),
+		Body:  choiceListBody(m.glyphs(), "What may "+m.flowTargetName()+" reach?", choices, cursor, m.mainPaneWidth()),
 		Hints: listHints(),
 	})
 }
 
 func (m model) renderLANCIDR() string {
-	glyphs := m.glyphs()
 	choices := m.lanCIDRChoices
 	if len(choices) == 0 {
 		choices = defaultLANCIDRChoices()
 	}
-	cursor := clampCursor(m.cursor, len(choices))
-	lines := []string{textStyle.Render("Which local network should " + string(m.networkAccess) + " allow?"), ""}
-	for i, choice := range choices {
-		label := fixedDisplayWidth(choice.Label, 18)
-		description := mutedStyle.Render(choice.Description)
-		if i == cursor {
-			label = selectedStyle.Render(label)
-			description = textStyle.Render(choice.Description)
-		}
-		lines = append(lines, cursorCellFor(glyphs, i == cursor)+label+" "+description)
+	rows := make([]accessChoice, 0, len(choices))
+	for _, choice := range choices {
+		rows = append(rows, accessChoice{Label: choice.Label, Description: choice.Description})
 	}
-	lines = append(lines, "", mutedStyle.Render("Launchpad saves the chosen CIDR for later runs."))
 	return m.renderFrame(framePage{
-		Trail: append(m.flowTrail(), "LAN CIDR"),
-		Step:  m.stepIndicator(),
-		Body:  strings.Join(lines, "\n"),
+		Trail: append(m.flowTrail(), "Local network"),
+		Body:  choiceListBody(m.glyphs(), "Which local network may the VM reach?", rows, m.cursor, m.mainPaneWidth()),
 		Hints: listHints(),
 	})
 }
 
 func (m model) renderLANCIDRText() string {
-	context := []string{
-		textStyle.Render("Enter the local network " + string(m.networkAccess) + " should allow."),
-		mutedStyle.Render("example: 192.168.1.0/24"),
-	}
 	return m.renderFrame(framePage{
-		Trail: append(m.flowTrail(), "LAN CIDR"),
-		Step:  m.stepIndicator(),
-		Body:  promptBody("LAN CIDR", m.lanInput, m.lanCursor, context, "allowed: 0-9 . /"),
+		Trail: append(m.flowTrail(), "Local network"),
+		Body:  promptBody("Which local network may the VM reach?", m.lanInput, m.lanCursor, "IPv4 CIDR, such as 192.168.1.0/24.", m.message),
 		Hints: promptHints(),
-	})
-}
-
-func (m model) renderImportPath() string {
-	lines := []string{
-		textStyle.Render("Enter the path to a .tvm archive."),
-		"",
-		sectionHeading("ARCHIVE PATH"),
-		"",
-		"  " + renderTextInputValue(m.importSourcePath, m.importPathCursor),
-		"",
-		mutedStyle.Render("The archive may contain secrets or other sensitive state."),
-	}
-	return m.renderFrame(framePage{
-		Trail: []string{"VMs", "import", "path"},
-		Body:  strings.Join(lines, "\n"),
-		Hints: []string{"enter continue", "esc cancel"},
-	})
-}
-
-func (m model) renderExportPath() string {
-	lines := []string{
-		textStyle.Render("Enter where to save the .tvm archive."),
-		"",
-		sectionHeading("ARCHIVE PATH"),
-		"",
-		"  " + renderTextInputValue(m.exportDestinationPath, m.exportPathCursor),
-		"",
-		mutedStyle.Render("The archive may contain secrets or other sensitive state."),
-	}
-	return m.renderFrame(framePage{
-		Trail: []string{"VMs", m.selectedVM.Name, "export", "path"},
-		Body:  strings.Join(lines, "\n"),
-		Hints: []string{"enter review", "esc back"},
 	})
 }
 
@@ -1654,63 +1480,48 @@ func (m model) renderMarkKind() string {
 	choices := vmKindChoices()
 	cursor := clampCursor(m.cursor, len(choices))
 	return m.renderFrame(framePage{
-		Trail: []string{"VMs", m.selectedVM.Name, "kind"},
-		Body:  choiceListBody(m.glyphs(), "How should Launchpad treat "+m.selectedVM.Name+"?", choices, cursor),
+		Trail: []string{"VMs", m.selectedVM.Name, "Role"},
+		Body:  choiceListBody(m.glyphs(), "What role should "+m.selectedVM.Name+" have?", choices, cursor, m.mainPaneWidth()) + "\n\n" + mutedStyle.Render("Changing the role does not inspect or clean the VM."),
 		Hints: listHints(),
 	})
 }
 
-// renderReview is the last screen before anything runs. It answers two
-// questions in a fixed order: what will this run touch, and what exact command
-// produces that. Everything else on the screen is subordinate to those blocks.
+// renderReview is the last screen before anything runs. The decision comes
+// first, followed by the access summary and the exact commands in quiet text.
 func (m model) reviewLines() []string {
 	glyphs := m.glyphs()
-	var lines []string
-	for _, warning := range m.plan.Warnings {
-		for i, line := range wrapPlain(warning, max(24, m.mainPaneWidth()-4)) {
-			prefix := "  "
-			if i == 0 {
-				prefix = glyphs.Arrow + " "
-			}
-			lines = append(lines, warningStyle.Render(prefix+line))
-		}
-	}
+	lines := []string{questionStyle.Render(m.reviewQuestion()), ""}
+	hasWarning := false
 	if m.selectedVM.Running && m.flow == flowRunExisting {
-		lines = append(lines, warningStyle.Render(glyphs.Arrow+" This VM is already running; tart run may fail."))
+		hasWarning = true
+		lines = append(lines, attentionStyle.Render(glyphs.Warn+" This VM is already running; Tart may refuse another run."))
 	}
-	if len(lines) > 0 {
+	if hasWarning {
 		lines = append(lines, "")
 	}
 	if m.plan.ShowsBoundaries() {
-		lines = append(lines, sectionHeading("THIS RUN WILL TOUCH"), "")
-		lines = append(lines, m.renderCompletedGrantLedger(), "")
+		lines = append(lines, m.renderRunSummary()...)
+		lines = append(lines, "")
 	}
-	if m.plan.ExportPath != "" {
-		lines = append(lines,
-			sectionHeading("FINAL ARCHIVE"),
-			"",
-			"  "+m.plan.ExportPath,
-			"  "+mutedStyle.Render("Launchpad installs the completed archive here without replacing an existing file."),
-			"")
+	commandHeading := "Command"
+	if len(m.plan.Steps) != 1 {
+		commandHeading = "Commands"
 	}
-	lines = append(lines, sectionHeading("EXACT COMMAND"), "")
+	lines = append(lines, sectionHeading(commandHeading), "")
 	for _, step := range m.plan.Steps {
-		lines = append(lines, mutedStyle.Render(step.Label))
-		lines = append(lines, m.renderCommandLedger(step)...)
+		lines = append(lines, m.renderReviewCommand(step)...)
 	}
 	if m.planRequiresTypedConfirm() {
-		state := mutedStyle.Render("type the template name to arm delete")
+		state := mutedStyle.Render("Type " + m.plan.DeleteVM + " to confirm. This cannot be undone.")
 		if m.deleteConfirmInput == m.plan.DeleteVM {
-			state = dangerStyle.Render("armed " + glyphs.Chevron + " enter deletes " + m.plan.DeleteVM)
+			state = dangerStyle.Render("Press enter to delete " + m.plan.DeleteVM + ".")
 		}
 		lines = append(lines,
 			"",
-			sectionHeading("CONFIRM TEMPLATE NAME"),
+			sectionHeading("Confirm"),
 			"",
-			"  "+renderTextInputValue(m.deleteConfirmInput, runeCount(m.deleteConfirmInput)),
+			"  "+renderTextInputValue(m.deleteConfirmInput, m.deleteConfirmCursor),
 			"  "+state)
-	} else if m.planRequiresExplicitYes() {
-		lines = append(lines, "", dangerStyle.Render("This cannot be undone. Press y to delete "+m.plan.DeleteVM+"."))
 	}
 	return lines
 }
@@ -1719,11 +1530,10 @@ func (m model) renderReview() string {
 	lines := m.reviewWindow(m.reviewLines())
 
 	return m.renderFrame(framePage{
-		Trail:  append(m.flowTrail(), "review"),
-		Step:   m.stepIndicator(),
+		Trail:  m.flowTrail(),
 		Body:   strings.Join(lines, "\n"),
 		Hints:  m.reviewHints(),
-		Danger: m.planRequiresExplicitYes(),
+		Danger: m.plan.DeleteVM != "",
 	})
 }
 
@@ -1735,12 +1545,11 @@ func (m model) renderExecute() string {
 			state = m.executeStates[i]
 		}
 		lines = append(lines, m.renderExecuteStep(state, step, i))
-		for _, line := range wrapCommandArgs(step.Args, commandWrapWidth(m.width)-6) {
-			lines = append(lines, "     "+mutedStyle.Render(line))
+		if state == executeStepFailed {
+			for _, line := range wrapCommandArgs(step.Args, commandWrapWidth(m.width)-6) {
+				lines = append(lines, "     "+mutedStyle.Render(line))
+			}
 		}
-	}
-	if len(m.plan.Steps) > 0 {
-		lines = append(lines, "", m.renderProgressBar())
 	}
 	glyphs := m.glyphs()
 	if m.executeSummary != "" {
@@ -1760,7 +1569,7 @@ func (m model) renderExecute() string {
 		hintSet = []string{"enter back to VMs"}
 	}
 	return m.renderFrame(framePage{
-		Trail:  append(m.flowTrail(), "execute"),
+		Trail:  append(m.flowTrail(), "Run"),
 		Step:   m.executeStepLabel(),
 		Body:   strings.Join(lines, "\n"),
 		Hints:  hintSet,
@@ -1771,7 +1580,7 @@ func (m model) renderExecute() string {
 func (m model) renderExecuteStep(state executeStepState, step CommandStep, index int) string {
 	glyphs := m.glyphs()
 	symbol := mutedStyle.Render(glyphs.Idle)
-	label := step.Label
+	label := m.executionStepLabel(step)
 	switch state {
 	case executeStepActive:
 		symbol = selectedStyle.Render(m.spinner.View())
@@ -1788,6 +1597,27 @@ func (m model) renderExecuteStep(state executeStepState, step CommandStep, index
 	return " " + fixedDisplayWidth(symbol+" "+label, 34) + mutedStyle.Render(m.stepElapsedLabel(index))
 }
 
+func (m model) executionStepLabel(step CommandStep) string {
+	target := m.executionReturnName()
+	if m.plan.HasTemporaryVM {
+		target = m.plan.TemporaryVM
+	}
+	switch step.Kind {
+	case CommandStepClone:
+		return "Create " + target
+	case CommandStepRun:
+		return "Start " + target
+	case CommandStepDeleteTemporaryVM:
+		return "Delete temporary VM"
+	case CommandStepRename:
+		return "Rename " + m.plan.RenameFrom
+	case CommandStepDelete:
+		return "Delete " + m.plan.DeleteVM
+	default:
+		return step.Label
+	}
+}
+
 // executeStepLabel is the right-hand step counter in the frame trail row.
 func (m model) executeStepLabel() string {
 	if len(m.plan.Steps) == 0 {
@@ -1799,46 +1629,16 @@ func (m model) executeStepLabel() string {
 	return fmt.Sprintf("step %d of %d", min(m.executeIndex+1, len(m.plan.Steps)), len(m.plan.Steps))
 }
 
-func (m model) renderCommandLedger(step CommandStep) []string {
-	if len(step.AnnotatedArgs) == 0 {
-		out := []string{}
-		for i, line := range wrapCommandArgs(step.Args, commandWrapWidth(m.width)) {
-			prefix := "  "
-			if i > 0 {
-				prefix = "    "
-			}
-			out = append(out, prefix+highlightRiskFlags(line))
-		}
-		return out
-	}
+func (m model) renderReviewCommand(step CommandStep) []string {
 	out := []string{}
-	if len(step.AnnotatedArgs) >= 2 {
-		out = append(out, "  "+commandStyle.Render(step.AnnotatedArgs[0].Value+" "+step.AnnotatedArgs[1].Value))
-	}
-	for _, arg := range step.AnnotatedArgs[2:] {
-		value := fixedDisplayWidth(quoteArg(arg.Value), 38)
-		value = commandStyle.Foreground(tintedGrantColor(arg.Provenance)).Render(value)
-		if arg.Provenance == "" {
-			out = append(out, "    "+value)
-			continue
+	for i, line := range wrapCommandArgs(step.Args, commandWrapWidth(m.width)-2) {
+		prefix := "  "
+		if i > 0 {
+			prefix = "    "
 		}
-		out = append(out, "    "+value+" "+mutedStyle.Render("<- "+arg.Provenance))
+		out = append(out, mutedStyle.Render(prefix+line))
 	}
 	return out
-}
-
-func (m model) renderProgressBar() string {
-	done := 0
-	for _, state := range m.executeStates {
-		if state == executeStepDone {
-			done++
-		}
-	}
-	ratio := float64(done) / float64(len(m.plan.Steps))
-	if m.executeDone && m.executeErr == "" {
-		ratio = 1
-	}
-	return " " + m.progress.ViewAs(ratio) + "  " + mutedStyle.Render(fmt.Sprintf("%d of %d steps", done, len(m.plan.Steps)))
 }
 
 func (m model) stepElapsedLabel(index int) string {
@@ -1956,6 +1756,13 @@ func (m *model) reconcileCompletedCleanup() bool {
 
 func (m model) filteredHomeItems() []homeItem {
 	filter := strings.ToLower(strings.TrimSpace(m.homeFilter))
+	actions := []homeItem{}
+	if filter == "" {
+		actions = append(actions, homeItem{action: "new"})
+		if len(m.cfg.PendingCleanup) > 0 {
+			actions = append(actions, homeItem{action: "cleanup"})
+		}
+	}
 	main := make([]homeItem, 0, len(m.vms))
 	templates := make([]homeItem, 0, len(m.vms))
 	for i, vm := range m.vms {
@@ -1969,7 +1776,25 @@ func (m model) filteredHomeItems() []homeItem {
 		}
 		main = append(main, item)
 	}
-	return append(main, templates...)
+	return append(actions, append(main, templates...)...)
+}
+
+func (m model) firstActionIndex(items []homeItem) int {
+	for i, item := range items {
+		if item.action != "" {
+			return i
+		}
+	}
+	return -1
+}
+
+func (m model) firstWorkspaceIndex(items []homeItem) int {
+	for i, item := range items {
+		if item.action == "" && item.vm.Kind != VMKindTemplate {
+			return i
+		}
+	}
+	return -1
 }
 
 func (m model) firstTemplateIndex(items []homeItem) int {
@@ -1981,8 +1806,18 @@ func (m model) firstTemplateIndex(items []homeItem) int {
 	return -1
 }
 
+func (m model) visibleVMCount(items []homeItem) int {
+	count := 0
+	for _, item := range items {
+		if item.action == "" {
+			count++
+		}
+	}
+	return count
+}
+
 // homeWindow keeps the highlighted VM inside the body region the frame gives
-// the list, leaving room for the filter row when FILTER mode is open.
+// the list, leaving room for the filter row when filtering is active.
 func (m model) homeWindow(count int) (int, int) {
 	if count == 0 {
 		return 0, 0
@@ -1992,7 +1827,13 @@ func (m model) homeWindow(count int) (int, int) {
 		available = 12
 	}
 	if m.mode == modeFilter || m.homeFilter != "" {
-		available -= 2
+		// The filter, a section label, spacing, and scroll markers are not
+		// represented in the item count.
+		available -= 5
+	} else {
+		// Reserve rows for section labels, spacing, scroll markers, and the
+		// stacked New VM description at the supported minimum width.
+		available -= 7
 	}
 	if available < 1 {
 		available = 1
@@ -2082,9 +1923,6 @@ func (m model) returnHomeForCurrentFlow() model {
 	if m.flow == flowNewFromTemplate {
 		return m.returnHomeToVM(m.selectedTemplate.Name)
 	}
-	if m.flow == flowImportArchive {
-		return m.returnHome()
-	}
 	return m.returnHomeToVM(m.selectedVM.Name)
 }
 
@@ -2117,7 +1955,7 @@ func (m model) goBack() model {
 // one place means a screen can never be entered with the wrong capture mode.
 func (m model) modeFor(next screen) inputMode {
 	switch next {
-	case screenName, screenProjectFolderPath, screenImportPath, screenExportPath, screenLANCIDRText:
+	case screenName, screenProjectFolderPath, screenLANCIDRText:
 		return modeInsert
 	case screenReview:
 		if m.planRequiresTypedConfirm() {
@@ -2135,14 +1973,6 @@ func (m model) showMessage(message string, returnScreen screen) model {
 	m.screen = screenMessage
 	m.mode = modeNormal
 	return m
-}
-
-func vmActions() []string {
-	return []string{"run", "export", "rename", "delete", "mark kind"}
-}
-
-func templateActions() []string {
-	return []string{"new temporary run", "new workspace", "run read-only", "export", "rename", "delete", "mark kind"}
 }
 
 func indexFolder(value FolderAccess) int {
@@ -2170,6 +2000,37 @@ func indexVM(vms []VM, name string) int {
 		}
 	}
 	return 0
+}
+
+func reviewVMKind(kind VMKind) string {
+	if kind == VMKindTemplate {
+		return "Template"
+	}
+	if kind == VMKindWorkspace {
+		return "Workspace"
+	}
+	return string(kind)
+}
+
+func (m model) availableTemporaryName(now time.Time) string {
+	base := "tmp-" + now.Format("20060102-150405")
+	exists := func(name string) bool {
+		for _, vm := range m.vms {
+			if vm.Name == name {
+				return true
+			}
+		}
+		return false
+	}
+	if !exists(base) {
+		return base
+	}
+	for suffix := 2; ; suffix++ {
+		candidate := fmt.Sprintf("%s-%d", base, suffix)
+		if !exists(candidate) {
+			return candidate
+		}
+	}
 }
 
 func clampCursor(cursor int, count int) int {
@@ -2215,30 +2076,36 @@ func defaultLANCIDRChoices() []lanCIDRChoice {
 	return choices
 }
 
-func vmActionRows(vm VM) []actionRow {
-	runDescription := "choose boundaries and start"
-	if vm.Running {
-		runDescription += " (already running)"
+func (m model) vmActionRows() []actionRow {
+	runDescription := "Choose connections and network"
+	if m.selectedVM.Running {
+		runDescription += "; already running"
 	}
-	return []actionRow{
-		{Label: "run", Description: runDescription},
-		{Label: "export", Description: "save an archive (may contain secrets)"},
-		{Label: "rename", Description: "change the local VM name"},
-		{Label: "delete", Description: "remove this VM permanently", Danger: true},
-		{Label: "mark kind", Description: "set template/workspace"},
+	rows := []actionRow{{ID: "run", Section: "Run", Label: "Choose settings and run", Description: runDescription}}
+	if _, ok := m.cfg.LastRunFor(m.selectedVM.Name); ok {
+		rows = append(rows, actionRow{ID: "run-again", Label: "Run again", Description: "Use the previous connections and network"})
 	}
+	return append(rows,
+		actionRow{ID: "rename", Section: "Manage", Label: "Rename", Description: "Change the VM name"},
+		actionRow{ID: "change-role", Label: "Change role", Description: "Choose Workspace or Template"},
+		actionRow{ID: "delete", Section: "Delete", Label: "Delete permanently", Description: "Remove this VM; cannot be undone", Danger: true},
+	)
 }
 
-func templateActionRows() []actionRow {
-	return []actionRow{
-		{Label: "new temporary run", Description: "clone, run, then delete afterward"},
-		{Label: "new workspace", Description: "clone and keep the VM"},
-		{Label: "run read-only", Description: "start template with root disk read-only"},
-		{Label: "export", Description: "save an archive (may contain secrets)"},
-		{Label: "rename", Description: "change the local VM name"},
-		{Label: "delete", Description: "remove this VM permanently", Danger: true},
-		{Label: "mark kind", Description: "set template/workspace"},
+func (m model) templateActionRows() []actionRow {
+	rows := []actionRow{
+		{ID: "new-temporary", Section: "Create", Label: "Temporary VM", Description: "Create, run, then delete automatically"},
+		{ID: "new-workspace", Label: "Workspace", Description: "Create a persistent VM"},
+		{ID: "run-template", Section: "Run", Label: "Run template", Description: "Template disk stays read-only; choose connections next"},
 	}
+	if _, ok := m.cfg.LastRunFor(m.selectedVM.Name); ok {
+		rows = append(rows, actionRow{ID: "run-again", Label: "Run again", Description: "Use the previous connections and network"})
+	}
+	return append(rows,
+		actionRow{ID: "rename", Section: "Manage", Label: "Rename", Description: "Change the VM name"},
+		actionRow{ID: "change-role", Label: "Change role", Description: "Choose Workspace or Template"},
+		actionRow{ID: "delete", Section: "Delete", Label: "Delete permanently", Description: "Remove this VM; cannot be undone", Danger: true},
+	)
 }
 
 // Key hints. Every screen advertises the same verbs in the same order, and the
@@ -2256,19 +2123,13 @@ func (m model) homeHints() []string {
 	if m.mode == modeFilter {
 		return []string{"enter keep filter", "esc clear", "↑↓ move"}
 	}
-	hints := []string{"enter open", "/ filter", ". repeat", "n new", "i import", "? keys", "q quit"}
-	if len(m.cfg.PendingCleanup) > 0 {
-		hints = append([]string{"c clean up"}, hints...)
-	}
-	return hints
+	return []string{"↑↓ move", "enter open", "/ filter", "? keys", "q quit"}
 }
 
 func (m model) reviewHints() []string {
 	switch {
 	case m.planRequiresTypedConfirm():
 		return []string{"enter delete", "esc back"}
-	case m.planRequiresExplicitYes():
-		return []string{"y delete", "c copy", "esc back"}
 	default:
 		return []string{"enter " + m.plan.ReviewVerb(), "c copy", "esc back", "? keys"}
 	}
@@ -2283,61 +2144,133 @@ type keyGroup struct {
 // keys do, not by when they were added.
 func (m model) keyGroups() []keyGroup {
 	groups := []keyGroup{{
-		title: "MOVE",
-		hints: []string{"j/↓ next", "k/↑ previous", "g first", "G last", "1-9 jump to choice"},
+		title: "Move",
+		hints: []string{"↓ or j next", "↑ or k previous"},
 	}, {
-		title: "ACT",
-		hints: []string{"enter choose or confirm", "l/→ choose", "c copy command on review", "y confirm delete"},
+		title: "Act",
+		hints: []string{"enter open, choose, or confirm", "c copy command on review"},
 	}, {
-		title: "GO BACK",
-		hints: []string{"esc back one step", "h/← back one step", "backspace back one step"},
+		title: "Go back",
+		hints: []string{"esc back one step"},
 	}}
 	if m.screen == screenHome {
 		groups = append(groups, keyGroup{
 			title: "VMs",
 			hints: []string{
-				". run again with last boundaries",
 				"n new VM from a template",
-				"i import a .tvm from Desktop",
-				"m cycle VM kind",
 				"r refresh from tart",
 				"/ filter by name or kind",
-				"c clean up a pending temporary VM",
 			},
 		})
 	}
 	return append(groups, keyGroup{
-		title: "ALWAYS",
+		title: "Always",
 		hints: []string{"? keys", "q quit from the VM list", "ctrl+c quit"},
 	})
 }
 
-// renderCompletedGrantLedger is the boundary manifest shown on review.
-func (m model) renderCompletedGrantLedger() string {
-	glyphs := m.glyphs()
-	return strings.Join([]string{
-		boundaryLine(glyphs.GrantTop+" folder", folderReviewDescription(m.plan.Review.FolderAccess)),
-		boundaryLine(glyphs.GrantBottom+" path", m.grantPathValue()),
-		boundaryLine("  network", networkReviewDescription(m.cfg, m.plan.Review.NetworkAccess)),
-		boundaryLine("  clipboard", connectionToggleValue(m.plan.Review.Clipboard, "host and guest clipboard contents can cross the boundary")),
-		boundaryLine("  guest audio", connectionToggleValue(m.plan.Review.GuestAudio, "guest audio plays through the host")),
-	}, "\n")
+func (m model) reviewQuestion() string {
+	switch {
+	case m.plan.RenameFrom != "":
+		return fmt.Sprintf("Rename %s to %s?", m.plan.RenameFrom, m.plan.RenameTo)
+	case m.plan.DeleteVM != "":
+		return "Delete " + m.plan.DeleteVM + "?"
+	case m.plan.ShowsBoundaries():
+		target := m.flowTargetName()
+		if target != "" {
+			return "Run " + target + "?"
+		}
+		return strings.TrimSpace(m.plan.Title) + "?"
+	default:
+		return strings.TrimSpace(m.plan.Title) + "?"
+	}
 }
 
-// grantPathValue reports the host path a folder grant opens, or says plainly
-// that no host folder is part of the grant.
-func (m model) grantPathValue() string {
-	if m.plan.Review.FolderAccess == FolderNoFolder {
-		return mutedStyle.Render("no host folder in this grant")
+// renderRunSummary translates internal mode names into the four decisions a
+// person needs to confirm. Details get their own line instead of becoming a
+// sentence beside the value.
+func (m model) renderRunSummary() []string {
+	lines := []string{}
+	if m.plan.Review.TemplateDiskReadOnly {
+		lines = append(lines, boundaryLine("Template disk", textStyle.Render("Read only")))
 	}
-	path := m.plan.Review.ProjectPath
-	if path == "" {
-		return mutedStyle.Render("no project folder selected")
+	lines = append(lines, boundaryLine("Folder", reviewFolderValue(m.plan.Review.FolderAccess)))
+	if m.plan.Review.FolderAccess != FolderNoFolder && m.plan.Review.ProjectPath != "" {
+		lines = append(lines, boundaryLine("", mutedStyle.Render(m.plan.Review.ProjectPath)))
 	}
-	if m.plan.Review.FolderAccess == FolderEditFolder {
-		return warningStyle.Render(path)
+
+	network, detail := reviewNetworkAccess(m.cfg, m.plan.Review.NetworkAccess)
+	lines = append(lines, boundaryLine("Network", reviewNetworkValue(m.plan.Review.NetworkAccess, network)))
+	if detail != "" {
+		lines = append(lines, boundaryLine("", mutedStyle.Render(detail)))
 	}
-	return textStyle.Render(path)
+	lines = append(lines,
+		boundaryLine("Clipboard", reviewConnectionValue(m.plan.Review.Clipboard, "Shared with VM")),
+		boundaryLine("Audio", reviewConnectionValue(m.plan.Review.GuestAudio, "Plays on this Mac")),
+	)
+	return lines
+}
+
+func reviewFolderValue(folder FolderAccess) string {
+	value := reviewFolderAccess(folder)
+	switch folder {
+	case FolderNoFolder:
+		return mutedStyle.Render(value)
+	case FolderReadFolder:
+		return attentionStyle.Render(value)
+	case FolderEditFolder:
+		return attentionStyle.Render(value)
+	default:
+		return textStyle.Render(value)
+	}
+}
+
+func reviewNetworkValue(network NetworkAccess, value string) string {
+	switch network {
+	case NetworkOffline:
+		return mutedStyle.Render(value)
+	case NetworkInternet, NetworkHost, NetworkLAN, NetworkLANAndInternet:
+		return attentionStyle.Render(value)
+	default:
+		return textStyle.Render(value)
+	}
+}
+
+func reviewFolderAccess(folder FolderAccess) string {
+	switch folder {
+	case FolderNoFolder:
+		return "None"
+	case FolderReadFolder:
+		return "Read only"
+	case FolderEditFolder:
+		return "Read and write"
+	default:
+		return string(folder)
+	}
+}
+
+func reviewNetworkAccess(cfg Config, network NetworkAccess) (string, string) {
+	switch network {
+	case NetworkOffline:
+		return "Block outbound IPv4", "Not complete network isolation"
+	case NetworkInternet:
+		return "Internet", "This Mac and local network blocked"
+	case NetworkHost:
+		return "This Mac", ""
+	case NetworkLAN:
+		return "Local network", strings.Join(cfg.Network.LANCIDRs, ", ")
+	case NetworkLANAndInternet:
+		return "Internet + local network", strings.Join(cfg.Network.LANCIDRs, ", ")
+	default:
+		return string(network), ""
+	}
+}
+
+func reviewConnectionValue(enabled bool, enabledText string) string {
+	if enabled {
+		return attentionStyle.Render(enabledText)
+	}
+	return mutedStyle.Render("Off")
 }
 
 // flowTrail is the breadcrumb prefix for every screen inside a flow.
@@ -2361,11 +2294,6 @@ func (m model) flowTargetName() string {
 		if m.selectedTemplate.Name != "" {
 			return "new VM"
 		}
-	case flowImportArchive:
-		if strings.TrimSpace(m.nameInput) != "" {
-			return strings.TrimSpace(m.nameInput)
-		}
-		return "imported VM"
 	}
 	return m.selectedVM.Name
 }
@@ -2374,35 +2302,9 @@ func (m model) planActionLabel() string {
 	switch m.flow {
 	case flowNewFromTemplate, flowRunTemplateReadOnly, flowRunExisting:
 		return "run"
-	case flowExportVM:
-		return "export"
-	case flowImportArchive:
-		return "import"
 	default:
 		return "review"
 	}
-}
-
-func (m model) stepIndicator() string {
-	total := 3
-	if m.networkNeedsCIDR() && len(m.cfg.Network.LANCIDRs) == 0 {
-		total++
-	}
-	current := 0
-	switch m.screen {
-	case screenFolder, screenProjectFolderPath:
-		current = 1
-	case screenNetwork:
-		current = 2
-	case screenLANCIDR, screenLANCIDRText:
-		current = 3
-	case screenReview:
-		current = total
-	}
-	if current == 0 {
-		return ""
-	}
-	return fmt.Sprintf("step %d of %d", current, total)
 }
 
 func truncate(value string, width int) string {
@@ -2677,12 +2579,8 @@ func summarizeCIDRs(values []string) string {
 	return strings.Join(values[:2], ",") + fmt.Sprintf(" +%d more", len(values)-2)
 }
 
-func (m model) planRequiresExplicitYes() bool {
-	return m.plan.DeleteVM != ""
-}
-
 func (m model) planRequiresTypedConfirm() bool {
-	return m.plan.DeleteVM != "" && m.selectedVM.Kind == VMKindTemplate
+	return m.plan.DeleteVM != ""
 }
 
 func planCommands(plan Plan) string {
@@ -2695,28 +2593,6 @@ func planCommands(plan Plan) string {
 
 func copyTextCommand(value string) tea.Cmd {
 	return tea.Printf("\x1b]52;c;%s\a", base64.StdEncoding.EncodeToString([]byte(value)))
-}
-
-func highlightRiskFlags(line string) string {
-	if strings.Contains(line, "'") {
-		return commandStyle.Render(line)
-	}
-	fields := strings.Fields(line)
-	if len(fields) == 0 {
-		return commandStyle.Render(line)
-	}
-	for i, field := range fields {
-		if strings.HasPrefix(field, "--dir=") && !strings.HasSuffix(field, ":ro") {
-			fields[i] = warningStyle.Render(field)
-			continue
-		}
-		if field == "--net-host" {
-			fields[i] = warningStyle.Render(field)
-			continue
-		}
-		fields[i] = commandStyle.Render(field)
-	}
-	return strings.Join(fields, " ")
 }
 
 func shortDuration(value time.Duration) string {

@@ -10,7 +10,6 @@ import (
 type HostEnvironment interface {
 	CurrentDirectory() (string, error)
 	ResolveProjectDirectory(path string) (string, error)
-	FileExists(path string) (bool, error)
 }
 
 type RealHostEnvironment struct{}
@@ -92,15 +91,4 @@ func pathAtOrWithin(path string, root string) bool {
 		return false
 	}
 	return relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
-}
-
-func (RealHostEnvironment) FileExists(path string) (bool, error) {
-	_, err := os.Stat(path)
-	if err == nil {
-		return true, nil
-	}
-	if os.IsNotExist(err) {
-		return false, nil
-	}
-	return false, err
 }

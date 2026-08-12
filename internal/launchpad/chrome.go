@@ -24,42 +24,12 @@ const (
 	modeConfirm
 )
 
-func (mode inputMode) label() string {
-	switch mode {
-	case modeInsert:
-		return "INSERT"
-	case modeFilter:
-		return "FILTER"
-	case modeConfirm:
-		return "CONFIRM"
-	default:
-		return "NORMAL"
-	}
-}
-
-func (mode inputMode) capturesText() bool {
-	return mode == modeInsert || mode == modeFilter || mode == modeConfirm
-}
-
-func modeChip(mode inputMode) string {
-	switch mode {
-	case modeInsert:
-		return insertChipStyle.Render(mode.label())
-	case modeFilter:
-		return filterChipStyle.Render(mode.label())
-	case modeConfirm:
-		return confirmChipStyle.Render(mode.label())
-	default:
-		return normalChipStyle.Render(mode.label())
-	}
-}
-
 const (
 	frameDefaultWidth = 96
 	frameMinWidth     = 48
 	frameMaxWidth     = 118
 	// title, context, spacing, and contextual keys
-	frameChromeHeight = 4
+	frameChromeHeight = 5
 	minBodyHeight     = 3
 )
 
@@ -83,7 +53,11 @@ func (m model) bodyHeight() int {
 	if m.height <= 0 {
 		return 0
 	}
-	height := m.height - frameChromeHeight
+	chromeHeight := frameChromeHeight
+	if m.status != "" {
+		chromeHeight += 2
+	}
+	height := m.height - chromeHeight
 	if height < minBodyHeight {
 		return minBodyHeight
 	}
@@ -104,6 +78,14 @@ type framePage struct {
 	Hints  []string
 	Danger bool
 }
+
+type noticeKind int
+
+const (
+	noticeNeutral noticeKind = iota
+	noticeSuccess
+	noticeAttention
+)
 
 // renderFrame keeps navigation context in one stable row. Dangerous screens
 // use the same content in the danger style so the frame matches the action.
@@ -137,17 +119,16 @@ func (m model) glyphs() glyphSet {
 // result of the last action, or a host condition that will bite at run time.
 func (m model) statusRow(width int) string {
 	glyphs := m.theme.glyphs
-	if m.screen != screenMessage && m.message != "" {
-		message := glyphs.Warn + " " + flattenLine(m.message)
-		return clampPlainWidth(warningStyle.Render(message), message, width)
-	}
 	if m.status != "" {
 		status := glyphs.Bullet + " " + flattenLine(m.status)
-		return clampPlainWidth(successStyle.Render(status), status, width)
-	}
-	if len(m.cfg.PendingCleanup) > 0 && m.screen == screenHome {
-		pending := glyphs.Warn + " pending cleanup: " + strings.Join(m.cfg.PendingCleanup, ", ")
-		return clampPlainWidth(warningStyle.Render(pending), pending, width)
+		style := selectedStyle
+		switch m.statusKind {
+		case noticeSuccess:
+			style = successStyle
+		case noticeAttention:
+			style = attentionStyle
+		}
+		return clampPlainWidth(style.Render(status), status, width)
 	}
 	return ""
 }

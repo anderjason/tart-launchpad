@@ -47,55 +47,42 @@ type VM struct {
 }
 
 type CommandStep struct {
-	Kind          CommandStepKind
-	Label         string
-	Args          []string
-	AnnotatedArgs []AnnotatedArg
-}
-
-type AnnotatedArg struct {
-	Value      string
-	Provenance string
+	Kind  CommandStepKind
+	Label string
+	Args  []string
 }
 
 type CommandStepKind string
 
 const (
 	CommandStepRun               CommandStepKind = "run"
-	CommandStepConfigure         CommandStepKind = "configure"
 	CommandStepClone             CommandStepKind = "clone"
 	CommandStepRename            CommandStepKind = "rename"
 	CommandStepDelete            CommandStepKind = "delete"
 	CommandStepDeleteTemporaryVM CommandStepKind = "delete-temporary-vm"
-	CommandStepExport            CommandStepKind = "export"
-	CommandStepImport            CommandStepKind = "import"
 )
 
 type Plan struct {
-	Title               string
-	Steps               []CommandStep
-	Review              PlanReview
-	CreatedVM           string
-	TemporaryVM         string
-	HasTemporaryVM      bool
-	RenameFrom          string
-	RenameTo            string
-	DeleteVM            string
-	ExportPath          string
-	ExportTemporaryPath string
-	ImportPath          string
-	ImportVMName        string
-	Warnings            []string
+	Title          string
+	Steps          []CommandStep
+	Review         PlanReview
+	CreatedVM      string
+	TemporaryVM    string
+	HasTemporaryVM bool
+	RenameFrom     string
+	RenameTo       string
+	DeleteVM       string
 }
 
 type PlanReview struct {
-	Verb           string
-	ShowBoundaries bool
-	FolderAccess   FolderAccess
-	ProjectPath    string
-	NetworkAccess  NetworkAccess
-	Clipboard      bool
-	GuestAudio     bool
+	Verb                 string
+	ShowBoundaries       bool
+	FolderAccess         FolderAccess
+	ProjectPath          string
+	NetworkAccess        NetworkAccess
+	Clipboard            bool
+	GuestAudio           bool
+	TemplateDiskReadOnly bool
 }
 
 type HostAccessGrant struct {
@@ -124,19 +111,6 @@ type NewFromTemplateOptions struct {
 	NetworkAccess NetworkAccess
 	Clipboard     bool
 	GuestAudio    bool
-}
-
-type ExportOptions struct {
-	VMName            string
-	VMKind            VMKind
-	DestinationPath   string
-	DestinationExists bool
-}
-
-type ImportOptions struct {
-	SourcePath      string
-	DestinationName string
-	ExistingVMs     []VM
 }
 
 func (k VMKind) Valid() bool {

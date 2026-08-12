@@ -13,24 +13,19 @@ const (
 	IntentNewFromTemplate     LaunchpadIntentKind = "new-from-template"
 	IntentRenameVM            LaunchpadIntentKind = "rename-vm"
 	IntentDeleteVM            LaunchpadIntentKind = "delete-vm"
-	IntentExportVM            LaunchpadIntentKind = "export-vm"
-	IntentImportArchive       LaunchpadIntentKind = "import-archive"
 )
 
 type LaunchpadIntent struct {
-	Kind                  LaunchpadIntentKind
-	VM                    VM
-	Template              VM
-	NameInput             string
-	ImportSourcePath      string
-	ExportDestinationPath string
-	RunDuration           RunDuration
-	FolderAccess          FolderAccess
-	ProjectPath           string
-	NetworkAccess         NetworkAccess
-	Clipboard             bool
-	GuestAudio            bool
-	ExistingVMs           []VM
+	Kind          LaunchpadIntentKind
+	VM            VM
+	Template      VM
+	NameInput     string
+	RunDuration   RunDuration
+	FolderAccess  FolderAccess
+	ProjectPath   string
+	NetworkAccess NetworkAccess
+	Clipboard     bool
+	GuestAudio    bool
 }
 
 func (i LaunchpadIntent) BuildPlan(cfg Config, host HostEnvironment) (Plan, error) {
@@ -48,10 +43,6 @@ func (i LaunchpadIntent) BuildPlan(cfg Config, host HostEnvironment) (Plan, erro
 		return BuildRenamePlan(i.VM.Name, i.NameInput)
 	case IntentDeleteVM:
 		return BuildDeletePlan(i.VM.Name)
-	case IntentExportVM:
-		return i.buildExportPlan(host)
-	case IntentImportArchive:
-		return i.buildImportPlan(host)
 	default:
 		return Plan{}, fmt.Errorf("%w: unknown launchpad intent %q", ErrUsage, i.Kind)
 	}
@@ -107,26 +98,4 @@ func (i LaunchpadIntent) resolvedProjectPath(host HostEnvironment) (string, erro
 		}
 	}
 	return host.ResolveProjectDirectory(path)
-}
-
-func (i LaunchpadIntent) buildExportPlan(host HostEnvironment) (Plan, error) {
-	destinationPath := strings.TrimSpace(i.ExportDestinationPath)
-	exists, err := host.FileExists(destinationPath)
-	if err != nil {
-		return Plan{}, err
-	}
-	return BuildExportPlan(ExportOptions{
-		VMName:            i.VM.Name,
-		VMKind:            i.VM.Kind,
-		DestinationPath:   destinationPath,
-		DestinationExists: exists,
-	})
-}
-
-func (i LaunchpadIntent) buildImportPlan(host HostEnvironment) (Plan, error) {
-	return BuildImportPlan(ImportOptions{
-		SourcePath:      i.ImportSourcePath,
-		DestinationName: i.NameInput,
-		ExistingVMs:     i.ExistingVMs,
-	})
 }

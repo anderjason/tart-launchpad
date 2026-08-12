@@ -2,7 +2,7 @@
 
 Choose what a Tart VM can touch before you run it.
 
-Tart Launchpad is a terminal interface for local Tart VMs. It asks about project-folder access, clipboard sharing, guest audio, and network access. Before it runs, imports, or exports anything, it shows the exact Tart command.
+Tart Launchpad is a terminal interface for local Tart VMs. It asks about project-folder access, clipboard sharing, guest audio, and network access. Before it changes or runs a VM, it shows the exact Tart command.
 
 ![Tart Launchpad with mock VMs](docs/demo/tart-launchpad.png)
 
@@ -27,7 +27,7 @@ go build -o tart-launchpad ./cmd/tart-launchpad
 2. Choose host connections and network access.
 3. Review the generated commands, then run them.
 
-Templates can create a workspace or a temporary VM, or run with a read-only root disk. Import and export each ask for a `.tvm` path before review.
+Templates can create a workspace or a temporary VM, or run with a read-only root disk. Launchpad generates names for temporary VMs and removes them after the run.
 
 ## Plan without running
 
@@ -43,9 +43,9 @@ Use `plan` when you only want to see the commands:
 
 The command prints the Tart commands and does not execute them.
 
-## Access choices
+## Host connections
 
-The project folder initially uses the directory where you start Launchpad. Press `p` in the host-connections step to choose another folder.
+The project folder initially uses the directory where you start Launchpad. Choose **Project folder** on the Connections screen to use another folder.
 
 - `no-folder`: share no host folder.
 - `read-folder`: share the selected project folder read-only.
@@ -61,4 +61,10 @@ Network access:
 - `lan`: allow configured local network ranges only.
 - `lan-and-internet`: allow configured local network ranges and the internet.
 
+`offline` blocks outbound IPv4; it is not a guarantee of complete network isolation.
+
 Launchpad is not a security sandbox. It makes each run's selected host connections visible before execution.
+
+## Interface design
+
+The product-wide palette, hierarchy, screen patterns, copy rules, responsive behavior, and keyboard model are documented in [DESIGN.md](DESIGN.md).

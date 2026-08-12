@@ -1,7 +1,6 @@
 package launchpad
 
 import (
-	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -17,13 +16,9 @@ func TestBuildRunPlanReadHereInternet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantConfigure := []string{"tart", "set", "dev", "--cpu", "4", "--memory", "8192", "--display", "1280x800"}
-	if !reflect.DeepEqual(plan.Steps[0].Args, wantConfigure) {
-		t.Fatalf("configure args\n got %#v\nwant %#v", plan.Steps[0].Args, wantConfigure)
-	}
 	wantRun := []string{"tart", "run", "--no-clipboard", "--no-audio", "--dir=project:/tmp/project:ro", "--net-softnet", "dev"}
-	if !reflect.DeepEqual(plan.Steps[1].Args, wantRun) {
-		t.Fatalf("run args\n got %#v\nwant %#v", plan.Steps[1].Args, wantRun)
+	if !reflect.DeepEqual(plan.Steps[0].Args, wantRun) {
+		t.Fatalf("run args\n got %#v\nwant %#v", plan.Steps[0].Args, wantRun)
 	}
 	if !plan.Review.ShowBoundaries || plan.Review.FolderAccess != FolderReadFolder || plan.Review.NetworkAccess != NetworkInternet {
 		t.Fatalf("review = %#v, want run boundary review", plan.Review)
@@ -42,8 +37,8 @@ func TestBuildRunPlanEditHereHost(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantRun := []string{"tart", "run", "--no-clipboard", "--no-audio", "--dir=project:/tmp/project", "--net-host", "dev"}
-	if !reflect.DeepEqual(plan.Steps[1].Args, wantRun) {
-		t.Fatalf("run args\n got %#v\nwant %#v", plan.Steps[1].Args, wantRun)
+	if !reflect.DeepEqual(plan.Steps[0].Args, wantRun) {
+		t.Fatalf("run args\n got %#v\nwant %#v", plan.Steps[0].Args, wantRun)
 	}
 }
 
@@ -60,8 +55,8 @@ func TestBuildRunPlanEnablesClipboardAndGuestAudioByOmittingDisableFlags(t *test
 		t.Fatal(err)
 	}
 	wantRun := []string{"tart", "run", "--dir=project:/tmp/project:ro", "--net-host", "dev"}
-	if !reflect.DeepEqual(plan.Steps[1].Args, wantRun) {
-		t.Fatalf("run args\n got %#v\nwant %#v", plan.Steps[1].Args, wantRun)
+	if !reflect.DeepEqual(plan.Steps[0].Args, wantRun) {
+		t.Fatalf("run args\n got %#v\nwant %#v", plan.Steps[0].Args, wantRun)
 	}
 	if !plan.Review.Clipboard || !plan.Review.GuestAudio || plan.Review.ProjectPath != "/tmp/project" {
 		t.Fatalf("review = %#v, want enabled host connections and explicit project path", plan.Review)
@@ -105,8 +100,8 @@ func TestBuildRunPlanLANAndInternet(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantRun := []string{"tart", "run", "--no-clipboard", "--no-audio", "--net-softnet", "--net-softnet-allow=192.168.1.0/24,10.0.0.0/8", "dev"}
-	if !reflect.DeepEqual(plan.Steps[1].Args, wantRun) {
-		t.Fatalf("run args\n got %#v\nwant %#v", plan.Steps[1].Args, wantRun)
+	if !reflect.DeepEqual(plan.Steps[0].Args, wantRun) {
+		t.Fatalf("run args\n got %#v\nwant %#v", plan.Steps[0].Args, wantRun)
 	}
 }
 
@@ -133,26 +128,6 @@ func TestBuildRunPlanIgnoresUnusedInvalidLANCIDR(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("offline plan failed because of unused LAN config: %v", err)
-	}
-}
-
-func TestBuildRunPlanConfiguresResourcesBeforeRun(t *testing.T) {
-	cfg := DefaultConfig()
-	plan, err := BuildRunPlan(cfg, RunOptions{
-		VMName:        "dev",
-		FolderAccess:  FolderNoFolder,
-		NetworkAccess: NetworkOffline,
-		ProjectPath:   "/tmp/project",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if plan.Steps[0].Kind != CommandStepConfigure {
-		t.Fatalf("first step kind = %q, want %q", plan.Steps[0].Kind, CommandStepConfigure)
-	}
-	want := []string{"tart", "set", "dev", "--cpu", "4", "--memory", "8192", "--display", "1280x800"}
-	if !reflect.DeepEqual(plan.Steps[0].Args, want) {
-		t.Fatalf("configure args\n got %#v\nwant %#v", plan.Steps[0].Args, want)
 	}
 }
 
@@ -191,139 +166,6 @@ func TestBuildDeletePlan(t *testing.T) {
 	}
 }
 
-func TestBuildExportPlanForTemplate(t *testing.T) {
-	destination := "/tmp/base.tvm"
-	plan, err := BuildExportPlan(ExportOptions{
-		VMName:          "base",
-		VMKind:          VMKindTemplate,
-		DestinationPath: destination,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := plan.Steps[0].Args[:3]; !reflect.DeepEqual(got, []string{"tart", "export", "base"}) {
-		t.Fatalf("command prefix = %#v", got)
-	}
-	if plan.ExportTemporaryPath == "" || plan.Steps[0].Args[3] != plan.ExportTemporaryPath {
-		t.Fatalf("temporary export path is not the reviewed command target: %#v", plan)
-	}
-	if filepath.Dir(plan.ExportTemporaryPath) != filepath.Dir(destination) {
-		t.Fatalf("temporary export directory = %q, want %q", filepath.Dir(plan.ExportTemporaryPath), filepath.Dir(destination))
-	}
-	if plan.ExportTemporaryPath == destination {
-		t.Fatal("export command targets the final destination directly")
-	}
-	if plan.Steps[0].Kind != CommandStepExport {
-		t.Fatalf("step kind = %q, want %q", plan.Steps[0].Kind, CommandStepExport)
-	}
-	if plan.ExportPath != destination {
-		t.Fatalf("export path = %q, want %q", plan.ExportPath, destination)
-	}
-	if len(plan.Warnings) == 0 || plan.Warnings[0] != VMArchiveSensitiveStateWarning {
-		t.Fatalf("warnings = %#v, want sensitive-state warning", plan.Warnings)
-	}
-}
-
-func TestBuildExportPlanForWorkspace(t *testing.T) {
-	destination := "/tmp/dev.tvm"
-	plan, err := BuildExportPlan(ExportOptions{
-		VMName:          "dev",
-		VMKind:          VMKindWorkspace,
-		DestinationPath: destination,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := plan.Steps[0].Args[3]; got == destination {
-		t.Fatal("export command targets the final destination directly")
-	}
-}
-
-func TestBuildExportPlanRejectsExistingDestination(t *testing.T) {
-	_, err := BuildExportPlan(ExportOptions{
-		VMName:            "dev",
-		VMKind:            VMKindWorkspace,
-		DestinationPath:   "/tmp/dev.tvm",
-		DestinationExists: true,
-	})
-	if err == nil {
-		t.Fatal("expected error")
-	}
-}
-
-func TestBuildExportPlanRejectsInvalidVMKind(t *testing.T) {
-	_, err := BuildExportPlan(ExportOptions{
-		VMName:          "dev",
-		VMKind:          VMKind("invalid"),
-		DestinationPath: "/tmp/dev.tvm",
-	})
-	if err == nil {
-		t.Fatal("expected error")
-	}
-}
-
-func TestBuildImportPlan(t *testing.T) {
-	source := "/tmp/dev.tvm"
-	plan, err := BuildImportPlan(ImportOptions{
-		SourcePath:      source,
-		DestinationName: "restored-dev",
-		ExistingVMs: []VM{{
-			Name: "dev",
-			Kind: VMKindWorkspace,
-		}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []string{"tart", "import", source, "restored-dev"}
-	if !reflect.DeepEqual(plan.Steps[0].Args, want) {
-		t.Fatalf("args\n got %#v\nwant %#v", plan.Steps[0].Args, want)
-	}
-	if plan.Steps[0].Kind != CommandStepImport {
-		t.Fatalf("step kind = %q, want %q", plan.Steps[0].Kind, CommandStepImport)
-	}
-	if plan.ImportPath != source || plan.ImportVMName != "restored-dev" {
-		t.Fatalf("import metadata = %#v", plan)
-	}
-}
-
-func TestBuildImportPlanRejectsExistingVMName(t *testing.T) {
-	_, err := BuildImportPlan(ImportOptions{
-		SourcePath:      "/tmp/dev.tvm",
-		DestinationName: "dev",
-		ExistingVMs: []VM{{
-			Name: "dev",
-			Kind: VMKindWorkspace,
-		}},
-	})
-	if err == nil {
-		t.Fatal("expected error")
-	}
-}
-
-func TestBuildImportPlanRequiresTVMFile(t *testing.T) {
-	_, err := BuildImportPlan(ImportOptions{
-		SourcePath:      "/tmp/dev.zip",
-		DestinationName: "dev",
-	})
-	if err == nil {
-		t.Fatal("expected error")
-	}
-}
-
-func TestBuildImportPlanAcceptsArchiveOutsideDesktop(t *testing.T) {
-	plan, err := BuildImportPlan(ImportOptions{
-		SourcePath:      "/tmp/downloads/dev.tvm",
-		DestinationName: "dev",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := plan.Steps[0].Args[2]; got != "/tmp/downloads/dev.tvm" {
-		t.Fatalf("import path = %q", got)
-	}
-}
-
 func TestBuildTemporaryRunPlan(t *testing.T) {
 	cfg := DefaultConfig()
 	plan, err := BuildNewFromTemplatePlan(cfg, NewFromTemplateOptions{
@@ -343,10 +185,10 @@ func TestBuildTemporaryRunPlan(t *testing.T) {
 	if plan.CreatedVM != "tmp-1" {
 		t.Fatalf("created VM = %q, want tmp-1", plan.CreatedVM)
 	}
-	if len(plan.Steps) != 4 {
-		t.Fatalf("expected clone/configure/run/delete, got %d steps", len(plan.Steps))
+	if len(plan.Steps) != 3 {
+		t.Fatalf("expected clone/run/delete, got %d steps", len(plan.Steps))
 	}
-	if plan.Steps[1].Kind != CommandStepConfigure {
-		t.Fatalf("second step kind = %q, want %q", plan.Steps[1].Kind, CommandStepConfigure)
+	if plan.Steps[1].Kind != CommandStepRun {
+		t.Fatalf("second step kind = %q, want %q", plan.Steps[1].Kind, CommandStepRun)
 	}
 }

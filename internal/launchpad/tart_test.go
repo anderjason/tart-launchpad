@@ -21,10 +21,9 @@ func TestIsRunnableVMSource(t *testing.T) {
 }
 
 type fakeTart struct {
-	failAtLabel    string
-	calls          [][]string
-	listVMs        []VM
-	exportContents []byte
+	failAtLabel string
+	calls       [][]string
+	listVMs     []VM
 }
 
 func (f *fakeTart) ListVMs() ([]VM, error) {
@@ -36,18 +35,12 @@ func (f *fakeTart) RunStep(stdout io.Writer, stderr io.Writer, step CommandStep)
 	if commandLabel(step.Args) == f.failAtLabel {
 		return errors.New("boom")
 	}
-	if step.Kind == CommandStepExport && len(f.exportContents) > 0 {
-		return os.WriteFile(step.Args[len(step.Args)-1], f.exportContents, 0o600)
-	}
 	return nil
 }
 
 func commandLabel(args []string) string {
 	if len(args) >= 3 && args[0] == "tart" && args[1] == "clone" {
 		return "clone"
-	}
-	if len(args) >= 3 && args[0] == "tart" && args[1] == "set" {
-		return "configure"
 	}
 	if len(args) >= 3 && args[0] == "tart" && args[1] == "delete" {
 		return "delete temporary VM"
@@ -64,10 +57,6 @@ func temporaryExecutionPlan() Plan {
 			Kind:  CommandStepClone,
 			Label: "clone",
 			Args:  []string{"tart", "clone", "template", "tmp-1"},
-		}, {
-			Kind:  CommandStepConfigure,
-			Label: "configure",
-			Args:  []string{"tart", "set", "tmp-1", "--cpu", "4"},
 		}, {
 			Kind:  CommandStepRun,
 			Label: "run",

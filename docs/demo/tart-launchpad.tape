@@ -8,17 +8,28 @@ Set TypingSpeed 0
 Set CursorBlink false
 Set PlaybackSpeed 0.5
 Env PATH "/tmp/tart-launchpad-mock-bin:/opt/homebrew/bin:/usr/bin:/bin"
+Env TART_LAUNCHPAD_CONFIG "/tmp/tart-launchpad-demo-config.json"
 
-Type "/tmp/tart-launchpad"
+Type "cd /tmp/tart-launchpad-demo-project && /tmp/tart-launchpad"
 Enter
 Sleep 4s
-Screenshot "/tmp/tart-launchpad.png"
 Enter
 Sleep 2s
 Enter
-Sleep 4s
-Down
-Sleep 4s
+Sleep 2s
 Enter
 Down
+Down
+Enter
+Down
+Down
+Enter
+Down
+Down
+Enter
+Down
+Enter
+Sleep 3s
+Screenshot "/tmp/tart-launchpad.png"
+Enter
 Sleep 4s

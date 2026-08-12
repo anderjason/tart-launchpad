@@ -12,8 +12,10 @@ import (
 // behaves.
 
 const (
-	choiceBadgeColumn = 20
-	ledgerLabelColumn = 10
+	choiceLabelColumn = 28
+	actionLabelColumn = 24
+	ledgerLabelColumn = 14
+	stackedRowWidth   = 72
 )
 
 // navigateList is the shared cursor behavior for every list in the app.
@@ -21,18 +23,14 @@ const (
 func navigateList(cursor int, count int, key string) (int, bool) {
 	cursor = clampCursor(cursor, count)
 	switch key {
-	case "up", "k", "ctrl+p":
+	case "up", "k":
 		if cursor > 0 {
 			cursor--
 		}
-	case "down", "j", "ctrl+n":
+	case "down", "j":
 		if cursor < count-1 {
 			cursor++
 		}
-	case "g", "home":
-		cursor = 0
-	case "G", "end":
-		cursor = max(0, count-1)
 	default:
 		return cursor, false
 	}
@@ -117,8 +115,8 @@ type accessChoice struct {
 	Label       string
 	Short       string
 	Description string
-	Style       lipgloss.Style
 	Danger      bool
+	Attention   bool
 }
 
 // shortText is the concise explanation shown beside each choice. Description
@@ -135,72 +133,99 @@ func renderAccessChoice(choice accessChoice, selected bool) string {
 }
 
 func accessChoiceRow(glyphs glyphSet, choice accessChoice, selected bool) string {
-	prefix := cursorCellFor(glyphs, selected)
-	labelCell := fixedDisplayWidth(grantBadge(choice), choiceBadgeColumn)
-	text := choice.shortText()
-	if choice.Danger {
-		return prefix + labelCell + " " + dangerStyle.Render(text)
-	}
-	if selected {
-		return prefix + labelCell + " " + textStyle.Render(text)
-	}
-	return prefix + labelCell + " " + mutedStyle.Render(text)
+	return strings.Join(choiceRows(glyphs, choice.Label, choice.shortText(), selected, choice.Danger, frameDefaultWidth), "\n")
 }
 
-// choiceListBody renders one concise explanation for each choice.
-func choiceListBody(glyphs glyphSet, prompt string, choices []accessChoice, cursor int) string {
+// choiceListBody is the shared choose template. At narrow widths, supporting
+// text moves below the label instead of being truncated or squeezed.
+func choiceListBody(glyphs glyphSet, prompt string, choices []accessChoice, cursor int, width int) string {
 	cursor = clampCursor(cursor, len(choices))
-	lines := []string{textStyle.Render(prompt), ""}
+	lines := []string{questionStyle.Render(prompt), ""}
 	for i, choice := range choices {
-		lines = append(lines, accessChoiceRow(glyphs, choice, i == cursor))
+		lines = append(lines, choiceRows(glyphs, choice.Label, choice.shortText(), i == cursor, choice.Danger, width)...)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func choiceRows(glyphs glyphSet, label string, description string, selected bool, danger bool, width int) []string {
+	prefix := cursorCellFor(glyphs, selected)
+	labelStyle := textStyle
+	if selected {
+		labelStyle = selectedStyle
+	} else if danger {
+		labelStyle = dangerStyle
+	}
+	detailStyle := mutedStyle
+	if selected {
+		detailStyle = textStyle
+	}
+	if width < stackedRowWidth {
+		return []string{
+			prefix + labelStyle.Render(label),
+			strings.Repeat(" ", lipgloss.Width(prefix)+2) + detailStyle.Render(description),
+		}
+	}
+	return []string{prefix + labelStyle.Render(fixedDisplayWidth(label, choiceLabelColumn)) + " " + detailStyle.Render(description)}
 }
 
 type actionRow struct {
+	ID          string
+	Section     string
 	Label       string
 	Description string
 	Danger      bool
+	Attention   bool
 }
 
-func actionListBody(glyphs glyphSet, intro []string, rows []actionRow, cursor int) string {
+func actionListBody(glyphs glyphSet, question string, rows []actionRow, cursor int, width int) string {
 	cursor = clampCursor(cursor, len(rows))
-	lines := append([]string{}, intro...)
-	if len(lines) > 0 {
-		lines = append(lines, "")
-	}
+	lines := []string{questionStyle.Render(question), ""}
+	lastSection := ""
 	for i, row := range rows {
-		prefix := cursorCellFor(glyphs, i == cursor)
-		label := fixedDisplayWidth(row.Label, 18)
-		switch {
-		case row.Danger:
-			label = dangerStyle.Render(label)
-		case i == cursor:
-			label = selectedStyle.Render(label)
+		if row.Section != "" && row.Section != lastSection {
+			if lastSection != "" {
+				lines = append(lines, "")
+			}
+			lines = append(lines, sectionHeading(row.Section))
+			lastSection = row.Section
 		}
-		description := mutedStyle.Render(row.Description)
-		if i == cursor {
-			description = textStyle.Render(row.Description)
-		}
-		lines = append(lines, prefix+label+" "+description)
+		lines = append(lines, actionRows(glyphs, row, i == cursor, width)...)
 	}
 	return strings.Join(lines, "\n")
 }
 
-// promptBody renders a labelled text prompt. The frame already shows INSERT, so
-// the prompt only has to show the value, the caret, and what is allowed.
-func promptBody(label string, value string, cursor int, context []string, allowed string) string {
-	lines := append([]string{}, context...)
-	if len(lines) > 0 {
-		lines = append(lines, "")
+func actionRows(glyphs glyphSet, row actionRow, selected bool, width int) []string {
+	prefix := cursorCellFor(glyphs, selected)
+	labelStyle := textStyle
+	if selected {
+		labelStyle = selectedStyle
+	} else if row.Danger {
+		labelStyle = dangerStyle
 	}
-	lines = append(lines,
-		sectionHeading(label),
-		"",
-		"  "+renderTextInputValue(value, cursor),
-		"",
-		mutedStyle.Render(allowed),
-	)
+	detailStyle := mutedStyle
+	if row.Attention && !selected {
+		detailStyle = attentionStyle
+	} else if selected {
+		detailStyle = textStyle
+	}
+	if width < stackedRowWidth {
+		return []string{
+			prefix + labelStyle.Render(row.Label),
+			strings.Repeat(" ", lipgloss.Width(prefix)+2) + detailStyle.Render(row.Description),
+		}
+	}
+	return []string{prefix + labelStyle.Render(fixedDisplayWidth(row.Label, actionLabelColumn)) + " " + detailStyle.Render(row.Description)}
+}
+
+// promptBody is the shared text-entry template: one question, one field, and
+// one local hint or validation message.
+func promptBody(question string, value string, cursor int, hint string, validation string) string {
+	lines := []string{questionStyle.Render(question), "", "  " + renderTextInputValue(value, cursor), ""}
+	if validation != "" {
+		lines = append(lines, attentionStyle.Render("▲ "+validation))
+	} else if hint != "" {
+		lines = append(lines, mutedStyle.Render(hint))
+	}
 	return strings.Join(lines, "\n")
 }
 
@@ -213,22 +238,16 @@ func boundaryLine(label string, value string) string {
 func folderAccessChoices() []accessChoice {
 	return []accessChoice{
 		{
-			Label:       string(FolderNoFolder),
-			Short:       "no host folder",
-			Description: "no host folder mounted",
-			Style:       noFolderBadgeStyle,
+			Label:       "None",
+			Description: "Do not share a host folder",
 		},
 		{
-			Label:       string(FolderReadFolder),
-			Short:       "project folder, read-only",
-			Description: "selected project folder read-only",
-			Style:       readHereBadgeStyle,
+			Label:       "Read only",
+			Description: "The VM can read the project folder",
 		},
 		{
-			Label:       string(FolderEditFolder),
-			Short:       "project folder, read-write",
-			Description: "selected project folder read-write",
-			Style:       editHereBadgeStyle,
+			Label:       "Read and write",
+			Description: "The VM can change the project folder",
 		},
 	}
 }
@@ -237,103 +256,59 @@ func networkAccessChoices(cfg Config) []accessChoice {
 	lanDescription := summarizeCIDRs(cfg.Network.LANCIDRs)
 	return []accessChoice{
 		{
-			Label:       string(NetworkOffline),
-			Short:       "outbound IPv4 blocked",
-			Description: "outbound IPv4 blocked",
-			Style:       offlineBadgeStyle,
+			Label:       "Block outbound IPv4",
+			Description: "Not a guarantee of complete network isolation",
 		},
 		{
-			Label:       string(NetworkInternet),
-			Short:       "internet, no local networks",
-			Description: "internet via Softnet; host/local private networks blocked",
-			Style:       internetBadgeStyle,
+			Label:       "Internet",
+			Description: "This Mac and local networks are blocked",
 		},
 		{
-			Label:       string(NetworkHost),
-			Short:       "this Mac only",
-			Description: "host-only network",
-			Style:       hostBadgeStyle,
+			Label:       "This Mac",
+			Description: "Reach services on this Mac only",
 		},
 		{
-			Label:       string(NetworkLAN),
-			Short:       "LAN only",
-			Description: "LAN only: " + lanDescription,
-			Style:       lanBadgeStyle,
+			Label:       "Local network",
+			Description: "Reach " + lanDescription + "; internet blocked",
 		},
 		{
-			Label:       string(NetworkLANAndInternet),
-			Short:       "internet plus LAN",
-			Description: "internet plus LAN: " + lanDescription,
-			Style:       lanInternetStyle,
+			Label:       "Internet + local network",
+			Description: "Reach the internet and " + lanDescription,
 		},
 	}
 }
 
 func folderAccessChoice(folder FolderAccess) accessChoice {
-	for _, choice := range folderAccessChoices() {
-		if choice.Label == string(folder) {
-			return choice
-		}
+	choices := folderAccessChoices()
+	if index := indexFolder(folder); index >= 0 && index < len(choices) {
+		return choices[index]
 	}
 	return accessChoice{
 		Label:       string(folder),
 		Description: string(folder),
-		Style:       unknownBadgeStyle,
 	}
 }
 
 func networkAccessChoice(cfg Config, network NetworkAccess) accessChoice {
-	for _, choice := range networkAccessChoices(cfg) {
-		if choice.Label == string(network) {
-			return choice
-		}
+	choices := networkAccessChoices(cfg)
+	if index := indexNetwork(network); index >= 0 && index < len(choices) {
+		return choices[index]
 	}
 	return accessChoice{
 		Label:       string(network),
 		Description: string(network),
-		Style:       unknownBadgeStyle,
 	}
-}
-
-// networkReviewChoice spells out the configured CIDRs instead of summarizing
-// them: review is the last place to read exactly what will be allowed.
-func networkReviewChoice(cfg Config, network NetworkAccess) accessChoice {
-	choice := networkAccessChoice(cfg, network)
-	if len(cfg.Network.LANCIDRs) == 0 {
-		return choice
-	}
-	switch network {
-	case NetworkLAN:
-		choice.Description = "LAN only: " + strings.Join(cfg.Network.LANCIDRs, ",")
-	case NetworkLANAndInternet:
-		choice.Description = "internet plus LAN: " + strings.Join(cfg.Network.LANCIDRs, ",")
-	}
-	return choice
-}
-
-func folderReviewDescription(folder FolderAccess) string {
-	choice := folderAccessChoice(folder)
-	return grantBadge(choice) + "  " + choice.Description
-}
-
-func networkReviewDescription(cfg Config, network NetworkAccess) string {
-	choice := networkReviewChoice(cfg, network)
-	return grantBadge(choice) + "  " + choice.Description
 }
 
 func runDurationChoices() []accessChoice {
 	return []accessChoice{
 		{
-			Label:       string(RunDurationTemporaryRun),
-			Short:       "clone, run, delete afterward",
-			Description: "clone from the template, run, then delete the clone",
-			Style:       temporaryRunBadgeStyle,
+			Label:       "Temporary",
+			Description: "Run a fresh VM, then delete it",
 		},
 		{
-			Label:       string(RunDurationWorkspace),
-			Short:       "keep for ongoing work",
-			Description: "clone from the template and keep the VM",
-			Style:       workspaceDurationBadgeStyle,
+			Label:       "Keep as workspace",
+			Description: "Create a persistent VM for ongoing work",
 		},
 	}
 }
@@ -341,16 +316,12 @@ func runDurationChoices() []accessChoice {
 func vmKindChoices() []accessChoice {
 	return []accessChoice{
 		{
-			Label:       string(VMKindTemplate),
-			Short:       "kept clean; source for new VMs",
-			Description: "kept clean; source for new VMs",
-			Style:       templateBadgeStyle,
+			Label:       "Template",
+			Description: "Protected source for creating VMs",
 		},
 		{
-			Label:       string(VMKindWorkspace),
-			Short:       "kept around; run directly",
-			Description: "kept around; run directly for ongoing work",
-			Style:       workspaceKindBadgeStyle,
+			Label:       "Workspace",
+			Description: "Persistent VM for normal runs",
 		},
 	}
 }
